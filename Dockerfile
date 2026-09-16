@@ -7,17 +7,10 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 
-COPY package.json package-lock.json tsconfig.json tsconfig.base.json ./
-COPY packages/shared/package.json packages/shared/package.json
-COPY packages/server/package.json packages/server/package.json
-COPY packages/client/package.json packages/client/package.json
+# Keep the Docker build intentionally simple and workspace-safe.
+COPY . .
 
 RUN npm ci
-
-COPY packages ./packages
-COPY scripts ./scripts
-COPY bin ./bin
-
 RUN npm run build
 
 ENV NODE_ENV=production \
