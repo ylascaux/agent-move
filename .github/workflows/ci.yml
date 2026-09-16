@@ -19,3 +19,22 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: docker build -t agent-move:ci .
+      - name: Smoke test Docker image
+        run: |
+          docker run -d --name agent-move-ci -p 3333:3333 \
+            -e AGENT_MOVE_CLAUDE=false \
+            -e AGENT_MOVE_OPENCODE=false \
+            -e AGENT_MOVE_CODEX=false \
+            -e AGENT_MOVE_PI=false \
+            agent-move:ci
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent http://127.0.0.1:3333/api/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs agent-move-ci
+          exit 1
+      - name: Stop Docker smoke test
+        if: always()
+        run: docker rm -f agent-move-ci || true
