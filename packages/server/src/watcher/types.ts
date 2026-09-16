@@ -1,10 +1,12 @@
-import type { AgentType } from '@agent-move/shared';
+import type { AgentSource, AgentType } from '@agent-move/shared';
 
 export interface SessionInfo {
   agentType: AgentType;
   projectPath: string;
   projectName: string;
   isSubagent: boolean;
+  /** Optional source metadata for multi-host/multi-runtime aggregation. */
+  source?: AgentSource;
   /** The encoded project directory (shared by main + subagents of the same project) */
   projectDir: string;
   /** The parent session ID extracted from the path (for subagents) */
@@ -12,12 +14,13 @@ export interface SessionInfo {
 }
 
 /** Create a minimal fallback SessionInfo for when session metadata is unavailable */
-export function createFallbackSession(agentType: AgentType, name: string): SessionInfo {
+export function createFallbackSession(agentType: AgentType, name: string, source?: AgentSource): SessionInfo {
   return {
     agentType,
     projectPath: name,
     projectName: name,
     isSubagent: false,
+    source,
     projectDir: name,
     parentSessionId: null,
   };

@@ -1,5 +1,6 @@
 import chokidar from 'chokidar';
 import Database from 'better-sqlite3';
+import type { AgentSource } from '@agent-move/shared';
 import type { AgentStateManager } from '../../state/agent-state-manager.js';
 import { createFallbackSession } from '../types.js';
 import type { SessionInfo } from '../types.js';
@@ -28,8 +29,21 @@ interface PartRow {
   data: string;
 }
 
+export interface OpenCodeWatcherOptions {
+  /** Explicit database path. Omit to keep the legacy auto-detection behavior. */
+  dbPath?: string;
+  /** Stable source id. When set, session IDs are namespaced as oc:<sourceId>:<sessionId>. */
+  sourceId?: string;
+  /** Human readable source name exposed to the client. */
+  sourceName?: string;
+  /** Runtime hint, usually "host" or "docker". */
+  runtime?: string;
+}
+
 /**
- * Watches OpenCode's SQLite database for new activity and forwards it to AgentStateManager.
+ * Watches one OpenCode SQLite database for new activity and forwards it to AgentStateManager.
+ * Multiple instances may run at the same time, which is how Docker volumes / multiple workers
+ * are aggregated without ever reading SQLite over a network filesystem.
  *
  * Strategy:
  *   1. Open the DB in readonly mode (WAL allows concurrent readers).
@@ -41,6 +55,7 @@ export class OpenCodeWatcher implements AgentWatcher {
   private watcher: chokidar.FSWatcher | null = null;
   private db: Database.Database | null = null;
   private parser = new OpenCodeParser();
+  private readonly source?: AgentSource;
 
   /** Timestamp watermark for incremental polling (ms) */
   private lastMessageTs = 0;
@@ -77,23 +92,43 @@ export class OpenCodeWatcher implements AgentWatcher {
   private stmtNewMessages!: Database.Statement;
   private stmtNewParts!: Database.Statement;
 
-  constructor(private stateManager: AgentStateManager) {}
+  constructor(
+    private stateManager: AgentStateManager,
+    private options: OpenCodeWatcherOptions = {},
+  ) {
+    if (options.sourceId) {
+      this.source = {
+        id: options.sourceId,
+        name: options.sourceName || options.sourceId,
+        kind: 'local',
+        runtime: options.runtime,
+      };
+    } else {
+      // Preserve legacy session IDs while still exposing useful source metadata.
+      this.source = {
+        id: 'local',
+        name: options.sourceName || 'Local',
+        kind: 'local',
+        runtime: options.runtime || 'host',
+      };
+    }
+  }
 
   async start(): Promise<void> {
     const activeThresholdMs = config.activeThresholdMs;
-    const dbPath = getOpenCodeDbPath();
+    const dbPath = this.options.dbPath ?? getOpenCodeDbPath();
     if (!dbPath) {
-      console.log('[opencode] No database found — OpenCode not installed or not yet used');
+      console.log(`${this.logPrefix()} No database found — OpenCode not installed or not yet used`);
       return;
     }
 
-    console.log(`[opencode] Database found at ${dbPath}`);
+    console.log(`${this.logPrefix()} Database found at ${dbPath}`);
 
     try {
       this.db = new Database(dbPath, { readonly: true, fileMustExist: true });
       this.prepareStatements();
     } catch (err) {
-      console.error('[opencode] Failed to open database:', err);
+      console.error(`${this.logPrefix()} Failed to open database:`, err);
       return;
     }
 
@@ -123,7 +158,7 @@ export class OpenCodeWatcher implements AgentWatcher {
     this.watcher.on('change', () => this.poll());
     this.watcher.on('add', () => this.poll());
 
-    console.log('[opencode] Watching for new activity');
+    console.log(`${this.logPrefix()} Watching for new activity`);
   }
 
   stop() {
@@ -168,7 +203,7 @@ export class OpenCodeWatcher implements AgentWatcher {
   private loadAllSessions() {
     const rows = this.stmtAllSessions.all() as OpenCodeSessionRow[];
     for (const row of rows) {
-      this.sessions.set(row.id, parseOpenCodeSession(row));
+      this.sessions.set(row.id, this.parseSession(row));
     }
   }
 
@@ -179,9 +214,9 @@ export class OpenCodeWatcher implements AgentWatcher {
     const recent = this.stmtRecentSessions.all(cutoff) as OpenCodeSessionRow[];
     if (recent.length === 0) return;
 
-    console.log(`[opencode] Replaying ${recent.length} recent session(s)`);
+    console.log(`${this.logPrefix()} Replaying ${recent.length} recent session(s)`);
     for (const session of recent) {
-      this.sessions.set(session.id, parseOpenCodeSession(session));
+      this.sessions.set(session.id, this.parseSession(session));
       this.replaySession(session.id);
     }
   }
@@ -211,8 +246,8 @@ export class OpenCodeWatcher implements AgentWatcher {
       ) as OpenCodeSessionRow[];
       for (const row of newSessions) {
         if (!this.sessions.has(row.id)) {
-          this.sessions.set(row.id, parseOpenCodeSession(row));
-          console.log(`[opencode] New session: ${row.id.slice(0, 20)} (${row.directory})`);
+          this.sessions.set(row.id, this.parseSession(row));
+          console.log(`${this.logPrefix()} New session: ${row.id.slice(0, 20)} (${row.directory})`);
         }
       }
 
@@ -230,7 +265,7 @@ export class OpenCodeWatcher implements AgentWatcher {
         if (part.time_created > this.lastPartCreatedTs) this.lastPartCreatedTs = part.time_created;
       }
     } catch (err) {
-      console.error('[opencode] Poll error:', err);
+      console.error(`${this.logPrefix()} Poll error:`, err);
     }
   }
 
@@ -359,11 +394,24 @@ export class OpenCodeWatcher implements AgentWatcher {
     return this.sessions.get(sessionId) ?? this.fallbackSession();
   }
 
+  private parseSession(row: OpenCodeSessionRow): SessionInfo {
+    return parseOpenCodeSession(row, this.source, this.options.sourceId);
+  }
+
   private prefixed(id: string): string {
-    return id.startsWith('oc:') ? id : `oc:${id}`;
+    if (id.startsWith('oc:')) return id;
+    return this.options.sourceId ? `oc:${this.options.sourceId}:${id}` : `oc:${id}`;
   }
 
   private fallbackSession(): SessionInfo {
-    return createFallbackSession('opencode', 'opencode');
+    return createFallbackSession(
+      'opencode',
+      this.options.sourceName || this.options.sourceId || 'opencode',
+      this.source,
+    );
+  }
+
+  private logPrefix(): string {
+    return this.options.sourceId ? `[opencode:${this.options.sourceId}]` : '[opencode]';
   }
 }

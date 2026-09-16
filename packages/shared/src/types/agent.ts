@@ -8,6 +8,18 @@ export type AgentType = 'claude' | 'opencode' | 'pi' | 'codex';
 /** Precise session lifecycle phase (hook-sourced when available, inferred otherwise) */
 export type AgentPhase = 'idle' | 'running' | 'compacting';
 
+/** Origin of an agent when AgentMove aggregates multiple machines/runtimes. */
+export interface AgentSource {
+  /** Stable identifier used for namespacing, e.g. "local", "work-laptop", "livalyo". */
+  id: string;
+  /** Human readable name shown by clients. */
+  name: string;
+  /** Whether this session was observed by this process or relayed by another AgentMove node. */
+  kind: 'local' | 'remote';
+  /** Optional runtime hint for UI/filtering. */
+  runtime?: 'host' | 'docker' | string;
+}
+
 export interface AgentState {
   id: string;
   sessionId: string;
@@ -17,6 +29,8 @@ export interface AgentState {
   rootSessionId: string;
   projectPath: string;
   projectName: string;
+  /** Origin metadata. Absent for legacy/local watchers that do not provide it yet. */
+  source?: AgentSource;
   /** Logical team agent name (e.g., "alice", "bob") — used to merge multiple sessions into one agent */
   agentName: string | null;
   role: AgentRole;

@@ -1,6 +1,7 @@
 import { homedir } from 'os';
 import { join } from 'path';
 import { existsSync } from 'fs';
+import type { AgentSource } from '@agent-move/shared';
 import type { SessionInfo } from '../types.js';
 
 /**
@@ -36,10 +37,17 @@ export interface OpenCodeSessionRow {
 
 /**
  * Convert an OpenCode session DB row into the shared SessionInfo format.
+ * sourceId is also used to namespace parent session IDs when multiple
+ * OpenCode databases are watched by the same AgentMove process.
  */
-export function parseOpenCodeSession(row: OpenCodeSessionRow): SessionInfo {
+export function parseOpenCodeSession(
+  row: OpenCodeSessionRow,
+  source?: AgentSource,
+  sourceId?: string,
+): SessionInfo {
   const segments = row.directory.replace(/\\/g, '/').split('/').filter(Boolean);
   const projectName = segments[segments.length - 1] || 'opencode';
+  const parentPrefix = sourceId ? `oc:${sourceId}:` : 'oc:';
 
   return {
     agentType: 'opencode',
@@ -48,7 +56,8 @@ export function parseOpenCodeSession(row: OpenCodeSessionRow): SessionInfo {
     projectPath: row.directory || row.project_id,
     projectName,
     isSubagent: !!row.parent_id,
-    projectDir: row.project_id,
-    parentSessionId: row.parent_id ? `oc:${row.parent_id}` : null,
+    source,
+    projectDir: sourceId ? `${sourceId}:${row.project_id}` : row.project_id,
+    parentSessionId: row.parent_id ? `${parentPrefix}${row.parent_id}` : null,
   };
 }

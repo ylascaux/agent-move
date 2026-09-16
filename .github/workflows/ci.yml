@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: docker build -t agent-move:ci .
+
+      - name: Smoke test Docker hub and push ingestion
+        run: |
+          docker run -d --name agent-move-ci -p 3333:3333 \
+            -e AGENT_MOVE_CLAUDE=false \
+            -e AGENT_MOVE_OPENCODE=false \
+            -e AGENT_MOVE_CODEX=false \
+            -e AGENT_MOVE_PI=false \
+            -e AGENT_MOVE_INGEST_TOKEN=test-token \
+            -e AGENT_MOVE_REMOTE_TTL_MS=3000 \
+            agent-move:ci
+
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent http://127.0.0.1:3333/api/health; then
+              break
+            fi
+            if [ "$attempt" = "20" ]; then
+              docker logs agent-move-ci
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # Ingest must reject unauthenticated collectors.
+          status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            -X POST http://127.0.0.1:3333/api/ingest/ci-node \
+            -H 'content-type: application/json' \
+            --data '{"name":"CI node","agents":[]}')
+          test "$status" = "401"
+
+          # Run a real collector container. It has no published port and can only
+          # reach the hub outbound through host.docker.internal.
+          docker run -d --name agent-move-collector-ci \
+            --add-host host.docker.internal:host-gateway \
+            -e AGENT_MOVE_HOST=127.0.0.1 \
+            -e AGENT_MOVE_CLAUDE=false \
+            -e AGENT_MOVE_OPENCODE=false \
+            -e AGENT_MOVE_CODEX=false \
+            -e AGENT_MOVE_PI=false \
+            -e AGENT_MOVE_NODE_ID=ci-collector \
+            -e 'AGENT_MOVE_NODE_NAME=CI collector' \
+            -e AGENT_MOVE_PUSH_URL=http://host.docker.internal:3333 \
+            -e AGENT_MOVE_PUSH_TOKEN=test-token \
+            -e AGENT_MOVE_PUSH_INTERVAL_MS=500 \
+            agent-move:ci
+
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent http://127.0.0.1:3333/api/sources | grep -q 'ci-collector'; then
+              break
+            fi
+            if [ "$attempt" = "20" ]; then
+              echo 'collector never appeared on hub'
+              docker logs agent-move-ci
+              docker logs agent-move-collector-ci
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # Authenticated snapshot with an agent must be namespaced in hub state.
+          curl --fail --silent \
+            -X POST http://127.0.0.1:3333/api/ingest/ci-node \
+            -H 'authorization: Bearer test-token' \
+            -H 'content-type: application/json' \
+            --data '{"name":"CI node","agents":[{"id":"oc:local:test","sessionId":"oc:local:test","rootSessionId":"oc:local:test","parentId":null,"source":{"id":"local","name":"Local","kind":"local","runtime":"docker"}}]}'
+
+          curl --fail --silent http://127.0.0.1:3333/api/state | grep -q 'remote:ci-node:oc:local:test'
+
+          # Once a collector disappears, its source and agents must expire.
+          docker rm -f agent-move-collector-ci
+          sleep 5
+
+          if curl --fail --silent http://127.0.0.1:3333/api/sources | grep -q 'ci-collector'; then
+            echo 'stale collector source was not expired'
+            docker logs agent-move-ci
+            exit 1
+          fi
+
+          if curl --fail --silent http://127.0.0.1:3333/api/state | grep -q 'remote:ci-node:oc:local:test'; then
+            echo 'stale remote agent was not expired'
+            docker logs agent-move-ci
+            exit 1
+          fi
+
+      - name: Stop Docker smoke test
+        if: always()
+        run: |
+          docker rm -f agent-move-collector-ci || true
+          docker rm -f agent-move-ci || true

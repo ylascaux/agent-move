@@ -6,9 +6,10 @@ import type { SessionInfo } from '../types.js';
 /**
  * Get the Codex CLI sessions directory.
  * Codex stores sessions at: ~/.codex/sessions/
+ * Docker collectors can override it with AGENT_MOVE_CODEX_SESSIONS.
  */
 export function getCodexSessionsDir(): string | null {
-  const candidate = join(homedir(), '.codex', 'sessions');
+  const candidate = process.env.AGENT_MOVE_CODEX_SESSIONS || join(homedir(), '.codex', 'sessions');
   return existsSync(candidate) ? candidate : null;
 }
 

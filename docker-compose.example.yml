@@ -1,0 +1,93 @@
+services:
+  # Central hub: this is the only AgentMove service that normally publishes a
+  # host port. Open http://localhost:3333 to see the aggregated web UI.
+  hub:
+    build: .
+    image: agent-move:local
+    restart: unless-stopped
+    ports:
+      - "3333:3333"
+    environment:
+      AGENT_MOVE_HOST: 0.0.0.0
+      AGENT_MOVE_PORT: 3333
+
+      # Recommended: require the same secret from every pushing collector.
+      AGENT_MOVE_INGEST_TOKEN: ${AGENT_MOVE_INGEST_TOKEN:-change-me}
+      AGENT_MOVE_REMOTE_TTL_MS: 15000
+
+      # The hub can also collect sessions from its own machine. Uncomment the
+      # relevant mounts + environment variables below if wanted.
+      AGENT_MOVE_OPENCODE: "false"
+      AGENT_MOVE_CLAUDE: "false"
+      AGENT_MOVE_CODEX: "false"
+      AGENT_MOVE_PI: "false"
+
+    volumes:
+      # Local OpenCode on the hub host:
+      # - ${HOME}/.local/share/opencode:/sources/opencode:ro
+
+      # Local Claude Code on the hub host:
+      # - ${HOME}/.claude:/sources/claude:ro
+
+      # Local Codex on the hub host:
+      # - ${HOME}/.codex/sessions:/sources/codex/sessions:ro
+
+  # Collector example. Run a service like this on each workstation/server.
+  # It needs outbound access to the hub only; do NOT publish port 3333.
+  collector:
+    build: .
+    image: agent-move:local
+    restart: unless-stopped
+    environment:
+      # Keep the collector's own HTTP server private inside the container.
+      AGENT_MOVE_HOST: 127.0.0.1
+      AGENT_MOVE_PORT: 3333
+
+      # Stable identity used by the hub. Change on every machine.
+      AGENT_MOVE_NODE_ID: work-laptop
+      AGENT_MOVE_NODE_NAME: Work laptop
+
+      # Outbound push to the hub. HTTPS is recommended across networks.
+      AGENT_MOVE_PUSH_URL: ${AGENT_MOVE_PUSH_URL:-http://host.docker.internal:3333}
+      AGENT_MOVE_PUSH_TOKEN: ${AGENT_MOVE_INGEST_TOKEN:-change-me}
+      AGENT_MOVE_PUSH_INTERVAL_MS: 1000
+
+      # Enable only what this machine actually exposes through read-only mounts.
+      AGENT_MOVE_OPENCODE: "true"
+      AGENT_MOVE_OPENCODE_SOURCES: local=/sources/opencode/opencode.db
+      AGENT_MOVE_CLAUDE: "false"
+      AGENT_MOVE_CODEX: "false"
+      AGENT_MOVE_PI: "false"
+
+      # Uncomment when the matching mounts below are enabled:
+      # AGENT_MOVE_CLAUDE_HOME: /sources/claude
+      # AGENT_MOVE_CODEX_SESSIONS: /sources/codex/sessions
+
+    volumes:
+      # OpenCode (enabled in this example)
+      - ${HOME}/.local/share/opencode:/sources/opencode:ro
+
+      # Claude Code
+      # - ${HOME}/.claude:/sources/claude:ro
+
+      # Codex CLI
+      # - ${HOME}/.codex/sessions:/sources/codex/sessions:ro
+
+      # Multiple OpenCode Docker workers can be mounted read-only instead:
+      # - staging-worker-1-opencode:/sources/staging-1:ro
+      # - staging-worker-2-opencode:/sources/staging-2:ro
+      # Then set:
+      # AGENT_MOVE_OPENCODE_SOURCES: staging-1=/sources/staging-1/opencode.db,staging-2=/sources/staging-2/opencode.db
+
+    # On Linux, this makes host.docker.internal available like on Docker Desktop.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+# Example external volumes from another Compose project:
+# volumes:
+#   staging-worker-1-opencode:
+#     external: true
+#     name: livalyo_staging-worker-1-opencode
+#   staging-worker-2-opencode:
+#     external: true
+#     name: livalyo_staging-worker-2-opencode
