@@ -9,6 +9,8 @@ import type { AgentEvent, AgentState } from '@agent-move/shared';
 export class RemoteAgentStore extends EventEmitter {
   private agents = new Map<string, AgentState>();
   private sourceAgents = new Map<string, Set<string>>();
+  private sourceLastSeen = new Map<string, number>();
+  private expiryTimer: ReturnType<typeof setInterval> | null = null;
 
   getAll(): AgentState[] {
     return Array.from(this.agents.values());
@@ -18,6 +20,8 @@ export class RemoteAgentStore extends EventEmitter {
     const previousIds = this.sourceAgents.get(sourceId) ?? new Set<string>();
     const nextIds = new Set<string>();
     const now = Date.now();
+
+    this.sourceLastSeen.set(sourceId, now);
 
     for (const raw of incoming) {
       const agent = this.namespaceAgent(sourceId, sourceName, raw);
@@ -58,20 +62,45 @@ export class RemoteAgentStore extends EventEmitter {
 
   clearSource(sourceId: string): void {
     const ids = this.sourceAgents.get(sourceId);
-    if (!ids) return;
     const now = Date.now();
-    for (const id of ids) {
-      const agent = this.agents.get(id);
-      this.agents.delete(id);
-      if (agent) {
-        this.emit('agent:shutdown', {
-          type: 'agent:shutdown',
-          agent: { ...agent },
-          timestamp: now,
-        } satisfies AgentEvent);
+
+    if (ids) {
+      for (const id of ids) {
+        const agent = this.agents.get(id);
+        this.agents.delete(id);
+        if (agent) {
+          this.emit('agent:shutdown', {
+            type: 'agent:shutdown',
+            agent: { ...agent },
+            timestamp: now,
+          } satisfies AgentEvent);
+        }
       }
     }
+
     this.sourceAgents.delete(sourceId);
+    this.sourceLastSeen.delete(sourceId);
+  }
+
+  startExpiry(ttlMs: number): void {
+    this.stopExpiry();
+    const intervalMs = Math.max(1000, Math.min(5000, Math.floor(ttlMs / 3)));
+    this.expiryTimer = setInterval(() => this.expireStale(ttlMs), intervalMs);
+  }
+
+  stopExpiry(): void {
+    if (this.expiryTimer) clearInterval(this.expiryTimer);
+    this.expiryTimer = null;
+  }
+
+  expireStale(ttlMs: number): void {
+    const cutoff = Date.now() - ttlMs;
+    for (const [sourceId, lastSeen] of this.sourceLastSeen) {
+      if (lastSeen < cutoff) {
+        console.warn(`[remote:${sourceId}] Snapshot expired after ${ttlMs}ms without refresh`);
+        this.clearSource(sourceId);
+      }
+    }
   }
 
   private namespaceAgent(sourceId: string, sourceName: string, raw: AgentState): AgentState {
