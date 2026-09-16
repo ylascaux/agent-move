@@ -36,6 +36,13 @@ export function registerApiRoutes(
     };
   });
 
+  app.get('/api/sources', async () => {
+    return {
+      sources: remoteStore?.getSources() ?? [],
+      timestamp: Date.now(),
+    };
+  });
+
   /**
    * Collector push endpoint. Nodes only need outbound HTTP(S) access to the hub.
    * Configure AGENT_MOVE_INGEST_TOKEN on the hub and the same value as
