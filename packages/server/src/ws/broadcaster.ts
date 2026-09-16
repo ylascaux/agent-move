@@ -1,13 +1,18 @@
 import type { WebSocket } from 'ws';
 import type { AgentStateManager } from '../state/agent-state-manager.js';
 import type { HookEventManager } from '../hooks/hook-event-manager.js';
+import type { RemoteAgentStore } from '../remote/remote-agent-store.js';
 import type { ServerMessage, AgentEvent, AnomalyEvent, TaskGraphData, ToolChainData, PendingPermission } from '@agent-move/shared';
 
 export class Broadcaster {
   private clients = new Set<WebSocket>();
   private boundListeners: Array<{ emitter: { removeListener(e: string, fn: (...args: any[]) => void): void }; event: string; fn: (...args: any[]) => void }> = [];
 
-  constructor(private stateManager: AgentStateManager, hookManager?: HookEventManager) {
+  constructor(
+    private stateManager: AgentStateManager,
+    hookManager?: HookEventManager,
+    private remoteStore?: RemoteAgentStore,
+  ) {
     const track = (emitter: any, event: string, fn: (...args: any[]) => void) => {
       emitter.on(event, fn);
       this.boundListeners.push({ emitter, event, fn });
@@ -30,24 +35,9 @@ export class Broadcaster {
         });
       });
     }
-    // Forward all agent events to connected clients
-    for (const eventType of ['agent:spawn', 'agent:update', 'agent:idle', 'agent:shutdown'] as const) {
-      track(stateManager, eventType, (event: AgentEvent) => {
-        if (eventType === 'agent:shutdown') {
-          this.broadcast({
-            type: 'agent:shutdown',
-            agentId: event.agent.id,
-            timestamp: event.timestamp,
-          });
-        } else {
-          this.broadcast({
-            type: eventType,
-            agent: event.agent,
-            timestamp: event.timestamp,
-          } as ServerMessage);
-        }
-      });
-    }
+
+    this.trackAgentEvents(track, stateManager);
+    if (remoteStore) this.trackAgentEvents(track, remoteStore);
 
     // Forward anomaly events
     track(stateManager.anomalyDetector, 'anomaly', (anomaly: AnomalyEvent) => {
@@ -88,6 +78,29 @@ export class Broadcaster {
     });
   }
 
+  private trackAgentEvents(
+    track: (emitter: any, event: string, fn: (...args: any[]) => void) => void,
+    emitter: any,
+  ): void {
+    for (const eventType of ['agent:spawn', 'agent:update', 'agent:idle', 'agent:shutdown'] as const) {
+      track(emitter, eventType, (event: AgentEvent) => {
+        if (eventType === 'agent:shutdown') {
+          this.broadcast({
+            type: 'agent:shutdown',
+            agentId: event.agent.id,
+            timestamp: event.timestamp,
+          });
+        } else {
+          this.broadcast({
+            type: eventType,
+            agent: event.agent,
+            timestamp: event.timestamp,
+          } as ServerMessage);
+        }
+      });
+    }
+  }
+
   addClient(ws: WebSocket) {
     this.clients.add(ws);
 
@@ -103,7 +116,7 @@ export class Broadcaster {
       try {
         const fullState: ServerMessage = {
           type: 'full_state',
-          agents: this.stateManager.getAll(),
+          agents: [...this.stateManager.getAll(), ...(this.remoteStore?.getAll() ?? [])],
           timeline: this.stateManager.getTimeline(),
           toolchain: this.stateManager.getToolChainSnapshot(),
           taskgraph: this.stateManager.getTaskGraphSnapshot(),
