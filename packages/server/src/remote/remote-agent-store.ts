@@ -25,8 +25,19 @@ export class RemoteAgentStore extends EventEmitter {
       const previous = this.agents.get(agent.id);
       this.agents.set(agent.id, agent);
 
-      const type: AgentEvent['type'] = previous ? 'agent:update' : 'agent:spawn';
-      this.emit(type, { type, agent: { ...agent }, timestamp: now } satisfies AgentEvent);
+      if (!previous) {
+        this.emit('agent:spawn', {
+          type: 'agent:spawn',
+          agent: { ...agent },
+          timestamp: now,
+        } satisfies AgentEvent);
+      } else if (JSON.stringify(previous) !== JSON.stringify(agent)) {
+        this.emit('agent:update', {
+          type: 'agent:update',
+          agent: { ...agent },
+          timestamp: now,
+        } satisfies AgentEvent);
+      }
     }
 
     for (const staleId of previousIds) {
@@ -66,13 +77,17 @@ export class RemoteAgentStore extends EventEmitter {
   private namespaceAgent(sourceId: string, sourceName: string, raw: AgentState): AgentState {
     const prefix = `remote:${sourceId}:`;
     const ns = (id: string | null): string | null => id ? `${prefix}${id}` : null;
+    const inferredOpenCodeSource = this.inferOpenCodeSource(raw.id);
 
-    const nestedSource = raw.source?.id && raw.source.id !== 'local'
-      ? `${sourceId}/${raw.source.id}`
-      : sourceId;
-    const nestedName = raw.source?.name && raw.source.name !== 'Local'
-      ? `${sourceName} / ${raw.source.name}`
-      : sourceName;
+    const childSourceId = raw.source?.id && raw.source.id !== 'local'
+      ? raw.source.id
+      : inferredOpenCodeSource;
+    const childSourceName = raw.source?.name && raw.source.name !== 'Local'
+      ? raw.source.name
+      : inferredOpenCodeSource;
+
+    const nestedSource = childSourceId ? `${sourceId}/${childSourceId}` : sourceId;
+    const nestedName = childSourceName ? `${sourceName} / ${childSourceName}` : sourceName;
 
     return {
       ...raw,
@@ -87,5 +102,11 @@ export class RemoteAgentStore extends EventEmitter {
         runtime: raw.source?.runtime || 'docker',
       },
     };
+  }
+
+  /** Extract source from the explicit OpenCode id format: oc:<source>:<session>. */
+  private inferOpenCodeSource(agentId: string): string | null {
+    const match = agentId.match(/^oc:([^:]+):.+$/);
+    return match?.[1] ?? null;
   }
 }
