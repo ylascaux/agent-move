@@ -19,6 +19,7 @@ import { SessionRecorder } from './storage/session-recorder.js';
 import { HookEventManager } from './hooks/hook-event-manager.js';
 import { RemoteAgentStore } from './remote/remote-agent-store.js';
 import { RemoteSourceWatcher } from './remote/remote-source-watcher.js';
+import { PushSourcePublisher } from './remote/push-source-publisher.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -38,12 +39,14 @@ export async function main() {
 
   const stateManager = new AgentStateManager();
   const remoteStore = new RemoteAgentStore();
+  remoteStore.startExpiry(config.remoteTtlMs);
+
   const sessionRecorder = new SessionRecorder(stateManager);
   const hookManager = new HookEventManager(stateManager);
   const broadcaster = new Broadcaster(stateManager, hookManager, remoteStore);
 
   registerWsHandler(app, stateManager, broadcaster, hookManager);
-  registerApiRoutes(app, stateManager, remoteStore);
+  registerApiRoutes(app, stateManager, remoteStore, config.ingestToken);
   registerSessionRoutes(app, sessionRecorder, stateManager);
 
   // Hook endpoint: receives Claude Code hook events via POST /hook
@@ -96,14 +99,27 @@ export async function main() {
   if (config.enablePi) watchers.push(new PiWatcher(stateManager));
   if (config.enableCodex) watchers.push(new CodexWatcher(stateManager));
 
-  // Remote nodes are intentionally separate from the local state machine.
-  // A hub can aggregate any number of Docker collectors through their /api/state endpoint.
+  // Legacy pull mode remains supported for compatibility.
   for (const remote of config.remoteSources) {
     watchers.push(new RemoteSourceWatcher(
       remote.id,
       remote.url,
       remoteStore,
       config.remotePollMs,
+    ));
+  }
+
+  // Recommended distributed mode: collectors push their local state outbound.
+  // This lets workstations/servers stay behind NAT/firewalls with no AgentMove
+  // port exposed inbound.
+  if (config.pushUrl) {
+    watchers.push(new PushSourcePublisher(
+      stateManager,
+      config.pushUrl,
+      config.nodeId,
+      config.nodeName,
+      config.pushToken,
+      config.pushIntervalMs,
     ));
   }
 
@@ -134,6 +150,7 @@ export async function main() {
   const shutdown = async () => {
     console.log('Shutting down...');
     for (const w of watchers) w.stop();
+    remoteStore.stopExpiry();
     sessionRecorder.dispose();
     hookManager.dispose();
     broadcaster.dispose();
