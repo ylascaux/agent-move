@@ -1,0 +1,323 @@
+/*
+ * Pokémon / Game Boy Color inspired dashboard chrome.
+ *
+ * The canvas theme itself is rendered with Pixi. This file gives the surrounding
+ * operational UI the same cream/green handheld-RPG language without depending on
+ * external game assets or a custom webfont.
+ */
+
+:root {
+  --bg-primary: #5e9d55;
+  --bg-panel: rgba(244, 237, 199, 0.97);
+  --bg-panel-solid: #f4edc7;
+  --accent: #c94f50;
+  --accent-dim: rgba(201, 79, 80, 0.15);
+  --success: #4f9a56;
+  --success-dim: rgba(79, 154, 86, 0.15);
+  --error: #c94f50;
+  --error-dim: rgba(201, 79, 80, 0.15);
+
+  --surface-1: rgba(23, 51, 58, 0.035);
+  --surface-2: rgba(23, 51, 58, 0.06);
+  --surface-3: rgba(23, 51, 58, 0.08);
+  --surface-4: rgba(23, 51, 58, 0.10);
+  --surface-hover: rgba(84, 156, 82, 0.17);
+  --surface-active: rgba(84, 156, 82, 0.25);
+  --surface-bright: rgba(23, 51, 58, 0.14);
+
+  --border-subtle: rgba(23, 51, 58, 0.18);
+  --border-light: rgba(23, 51, 58, 0.28);
+  --border-medium: rgba(23, 51, 58, 0.42);
+  --border-strong: #17333a;
+
+  --text-primary: #17333a;
+  --text-secondary: #31505a;
+  --text-dim: #60746e;
+  --text-muted: #72857b;
+  --text-faint: #84958a;
+  --text-ghost: #97a396;
+
+  --font-ui: ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+
+  --radius-xs: 2px;
+  --radius-sm: 3px;
+  --radius-md: 4px;
+  --radius-lg: 5px;
+  --radius-xl: 6px;
+  --card-radius: 3px;
+
+  --shadow-sm: 2px 2px 0 rgba(23, 51, 58, 0.35);
+  --shadow-md: 3px 3px 0 rgba(23, 51, 58, 0.35);
+  --shadow-lg: 4px 4px 0 rgba(23, 51, 58, 0.4);
+}
+
+html { color-scheme: light; }
+
+html,
+body {
+  background: #5e9d55;
+  color: var(--text-secondary);
+}
+
+button,
+select,
+input {
+  font-family: var(--font-ui);
+}
+
+/* --- Main handheld-RPG frame ------------------------------------------------ */
+#top-bar,
+#focus-sub-bar,
+#sidebar,
+#right-panel {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+#top-bar {
+  background: #f4edc7;
+  border-bottom: 3px solid #17333a;
+  box-shadow: inset 0 -1px 0 #d9cf9f;
+}
+
+.tb-logo-text {
+  color: #17333a;
+  letter-spacing: -0.04em;
+  text-transform: lowercase;
+}
+
+.tb-stat {
+  border-right-color: rgba(23, 51, 58, 0.2);
+}
+
+.tb-actions button,
+.tb-hamburger {
+  border-radius: 3px;
+}
+
+.tb-actions button {
+  background: #fff9dd;
+  border: 1px solid #31505a;
+  box-shadow: 1px 1px 0 #31505a;
+}
+
+.tb-actions button:hover,
+.tb-hamburger:hover {
+  background: #dff0b3;
+  color: #17333a;
+}
+
+#focus-sub-bar {
+  background: #fff9dd;
+  border-bottom: 2px solid #17333a;
+}
+
+.fi-stop {
+  border: 1px solid #a33f47;
+  border-radius: 3px;
+  background: #f5d6c2;
+  box-shadow: 1px 1px 0 #a33f47;
+}
+
+#sidebar {
+  background: #eef0c8;
+  border-right: 3px solid #17333a;
+}
+
+.sb-section-title {
+  color: #526c63;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.sb-item,
+.sb-footer-btn {
+  border-radius: 3px;
+  font-weight: 700;
+}
+
+.sb-item:hover,
+.sb-footer-btn:hover {
+  background: #dbe9ad;
+  color: #17333a;
+}
+
+.sb-item.active {
+  background: #dbe9ad;
+  color: #17333a;
+  box-shadow: inset 0 0 0 2px #31505a, 2px 2px 0 rgba(23, 51, 58, 0.18);
+}
+
+.sb-item.active .sb-icon {
+  color: #c94f50;
+}
+
+.sb-shortcut {
+  background: #fff9dd;
+  border-color: #60746e;
+  color: #526c63;
+  border-radius: 2px;
+}
+
+.sb-theme-select,
+.filter-zone-select,
+.filter-project-select {
+  background: #fff9dd !important;
+  color: #17333a !important;
+  border: 1px solid #31505a !important;
+  border-radius: 2px !important;
+  box-shadow: 1px 1px 0 rgba(23, 51, 58, 0.35);
+}
+
+.sb-theme-select option,
+.filter-zone-select option {
+  background: #fff9dd !important;
+  color: #17333a !important;
+}
+
+#right-panel {
+  background: rgba(244, 237, 199, 0.98);
+  border-left: 3px solid #17333a;
+}
+
+.panel-header {
+  background: #e3e8b7;
+  border-bottom: 2px solid #17333a;
+}
+
+.panel-title {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.panel-close {
+  background: #fff9dd;
+  border: 1px solid #31505a;
+  border-radius: 2px;
+  box-shadow: 1px 1px 0 #31505a;
+}
+
+/* --- Agent party / roster ---------------------------------------------------- */
+#filter-pills {
+  gap: 5px;
+}
+
+.filter-pill,
+.clean-done-btn {
+  border-radius: 2px !important;
+  border: 1px solid #31505a !important;
+  background: #fff9dd !important;
+  color: #31505a !important;
+  box-shadow: 1px 1px 0 rgba(23, 51, 58, 0.3);
+}
+
+.filter-pill.active {
+  background: #dbe9ad !important;
+  color: #17333a !important;
+  box-shadow: inset 0 0 0 1px #4f9a56, 1px 1px 0 #31505a;
+}
+
+.agent-group,
+.agent-card,
+.empty-state {
+  border-radius: 3px !important;
+}
+
+.agent-card {
+  background: #fff9dd !important;
+  border-top: 1px solid #31505a !important;
+  border-right: 1px solid #31505a !important;
+  border-bottom: 1px solid #31505a !important;
+  box-shadow: 2px 2px 0 rgba(23, 51, 58, 0.25);
+}
+
+.agent-card:hover {
+  background: #f6f1c9 !important;
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 rgba(23, 51, 58, 0.28);
+}
+
+.agent-card .name,
+.group-name {
+  color: #17333a !important;
+  font-weight: 800 !important;
+}
+
+.agent-card .zone,
+.task-desc,
+.card-tokens {
+  color: #526c63 !important;
+}
+
+.group-header {
+  background: #e3e8b7 !important;
+  border: 1px solid #31505a !important;
+  border-radius: 2px !important;
+}
+
+.status-badge,
+.sub-count,
+.role-badge {
+  border-radius: 2px !important;
+}
+
+/* --- Floating world controls ------------------------------------------------ */
+#zoom-controls button,
+.layout-editor-panel,
+.command-palette,
+.notification-panel {
+  background: #fff9dd !important;
+  color: #17333a !important;
+  border-color: #31505a !important;
+  backdrop-filter: none !important;
+}
+
+#zoom-controls button {
+  border-radius: 3px;
+  box-shadow: 2px 2px 0 rgba(23, 51, 58, 0.35);
+}
+
+#zoom-controls button:hover {
+  background: #dbe9ad !important;
+  color: #17333a !important;
+}
+
+.layout-editor-panel {
+  border-width: 2px;
+  border-radius: 3px;
+  box-shadow: 3px 3px 0 rgba(23, 51, 58, 0.35);
+}
+
+.le-title {
+  color: #a33f47;
+}
+
+/* --- Scrollbars: chunky but unobtrusive ------------------------------------- */
+* {
+  scrollbar-color: #60746e #e3e8b7;
+  scrollbar-width: thin;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #e3e8b7;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #60746e;
+  border: 2px solid #e3e8b7;
+}
+
+/* Keep motion crisp rather than glossy. */
+@media (prefers-reduced-motion: no-preference) {
+  .agent-card,
+  .sb-item,
+  .tb-actions button,
+  #zoom-controls button {
+    transition-duration: 80ms !important;
+  }
+}
