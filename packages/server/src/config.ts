@@ -42,6 +42,9 @@ const remoteSources: RemoteSourceConfig[] = parseNamedValues(
   process.env.AGENT_MOVE_REMOTE_SOURCES,
 ).map(({ id, value }) => ({ id, url: value.replace(/\/$/, '') }));
 
+const pushUrl = (process.env.AGENT_MOVE_PUSH_URL || '').replace(/\/$/, '');
+const nodeId = process.env.AGENT_MOVE_NODE_ID || process.env.HOSTNAME || 'node';
+
 export const config = {
   port: parseInt(process.env.AGENT_MOVE_PORT || '3333', 10),
   host: process.env.AGENT_MOVE_HOST || '127.0.0.1',
@@ -62,7 +65,20 @@ export const config = {
   enablePi: process.env.AGENT_MOVE_PI !== 'false',
   /** Enable Codex CLI session watching (auto-detected if sessions dir exists) */
   enableCodex: process.env.AGENT_MOVE_CODEX !== 'false',
-  /** Remote AgentMove nodes as id=http://host:3333. Hub polls /api/state. */
+
+  /** Legacy pull mode: remote AgentMove nodes as id=http://host:3333. */
   remoteSources,
   remotePollMs: Math.max(250, parseInt(process.env.AGENT_MOVE_REMOTE_POLL_MS || '1000', 10)),
+
+  /** Recommended push mode: collectors POST their local snapshot to this hub URL. */
+  pushUrl,
+  nodeId,
+  nodeName: process.env.AGENT_MOVE_NODE_NAME || nodeId,
+  pushToken: process.env.AGENT_MOVE_PUSH_TOKEN || '',
+  pushIntervalMs: Math.max(500, parseInt(process.env.AGENT_MOVE_PUSH_INTERVAL_MS || '1000', 10)),
+
+  /** Optional Bearer token required by the hub ingest endpoint. */
+  ingestToken: process.env.AGENT_MOVE_INGEST_TOKEN || '',
+  /** Remove remote snapshots when a collector stops refreshing them. */
+  remoteTtlMs: Math.max(2000, parseInt(process.env.AGENT_MOVE_REMOTE_TTL_MS || '15000', 10)),
 } as const;
