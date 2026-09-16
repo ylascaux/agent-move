@@ -1,111 +1,122 @@
 import type { ZoneConfig } from '../types/zone.js';
 
 /**
- * Responsive bento-grid zone layout.
- * Zones are defined by grid position (colStart/colSpan/rowStart/rowSpan)
- * on a 12-column grid with 3 rows of varying weight.
+ * Workflow-oriented room layout.
+ *
+ * AgentMove keeps the historical internal ZoneId values for backwards
+ * compatibility, but the rooms now represent the phases that matter when
+ * supervising coding/platform agents rather than literal tool categories.
+ *
+ * Internal id -> displayed workflow room:
+ *   thinking  -> Thinking
+ *   tasks     -> Plan
+ *   search    -> Research
+ *   files     -> Build
+ *   messaging -> Review / Judge
+ *   web       -> Security
+ *   terminal  -> Deploy / Ops
+ *   spawn     -> Orchestrate
+ *   idle      -> Idle
  *
  * Layout:
- * ┌─────────────┬──────────┬────────────┐
- * │  Search      │ Terminal │  Web       │  Row 0 (weight 5)
- * │  [col 0-4]   │ [col 5-7]│ [col 8-11] │
- * ├──────────┬───┴──────────┴──┬─────────┤
- * │  Files   │  Thinking       │ Msgs    │  Row 1 (weight 4)
- * │ [col 0-3]│  [col 4-8]      │[col 9-11]│
- * ├────┬─────┴──────────┬──────┴─────────┤
- * │Spwn│  Idle          │    Tasks       │  Row 2 (weight 3)
- * │0-2 │  [col 3-7]     │   [col 8-11]  │
- * └────┴────────────────┴────────────────┘
+ * ┌──────────────┬──────────────┬──────────────┐
+ * │ Thinking     │ Plan         │ Research     │
+ * ├─────────────────────┬──────────┬───────────┤
+ * │ Build               │ Review   │ Security  │
+ * ├──────────────┬──────────────┬──────────────┤
+ * │ Deploy / Ops │ Orchestrate  │ Idle         │
+ * └──────────────┴──────────────┴──────────────┘
  *
- * x/y/width/height are computed by the LayoutEngine at runtime.
- * The defaults below are fallback values for the original fixed layout.
+ * x/y/width/height are computed by LayoutEngine at runtime.
  */
 
 export const GRID_COLS = 12;
-export const ROW_WEIGHTS = [5, 4, 3];
+export const ROW_WEIGHTS = [3, 4, 3];
 
 export const ZONES: ZoneConfig[] = [
-  // Row 0
-  {
-    id: 'search',
-    label: 'Search',
-    description: 'Grep, WebSearch — Research & lookup',
-    icon: '\u{1F4DA}',
-    color: 0xeab308,
-    colStart: 0, colSpan: 5, rowStart: 0, rowSpan: 1,
-    x: 0, y: 0, width: 0, height: 0,
-  },
-  {
-    id: 'terminal',
-    label: 'Terminal',
-    description: 'Bash commands — Server room',
-    icon: '\u{1F4BB}',
-    color: 0x22c55e,
-    colStart: 5, colSpan: 3, rowStart: 0, rowSpan: 1,
-    x: 0, y: 0, width: 0, height: 0,
-  },
-  {
-    id: 'web',
-    label: 'Web',
-    description: 'WebFetch, Browser — Network hub',
-    icon: '\u{1F310}',
-    color: 0x8b5cf6,
-    colStart: 8, colSpan: 4, rowStart: 0, rowSpan: 1,
-    x: 0, y: 0, width: 0, height: 0,
-  },
-  // Row 1
-  {
-    id: 'files',
-    label: 'Files',
-    description: 'Read, Write, Edit, Glob — File storage',
-    icon: '\u{1F4C1}',
-    color: 0x3b82f6,
-    colStart: 0, colSpan: 4, rowStart: 1, rowSpan: 1,
-    x: 0, y: 0, width: 0, height: 0,
-  },
+  // Row 0 — cognition
   {
     id: 'thinking',
     label: 'Thinking',
-    description: 'Planning, Questions — Conference area',
+    description: 'Reasoning, questions and problem framing',
     icon: '\u{1F4AD}',
-    color: 0xf97316,
-    colStart: 4, colSpan: 5, rowStart: 1, rowSpan: 1,
+    color: 0xf3bd4d,
+    colStart: 0, colSpan: 4, rowStart: 0, rowSpan: 1,
+    x: 0, y: 0, width: 0, height: 0,
+  },
+  {
+    id: 'tasks',
+    label: 'Plan',
+    description: 'Architecture, task breakdown and implementation plans',
+    icon: '\u{1F5FA}\uFE0F',
+    color: 0x5c8fd6,
+    colStart: 4, colSpan: 4, rowStart: 0, rowSpan: 1,
+    x: 0, y: 0, width: 0, height: 0,
+  },
+  {
+    id: 'search',
+    label: 'Research',
+    description: 'Search, investigation and evidence gathering',
+    icon: '\u{1F50E}',
+    color: 0x52b9a5,
+    colStart: 8, colSpan: 4, rowStart: 0, rowSpan: 1,
+    x: 0, y: 0, width: 0, height: 0,
+  },
+
+  // Row 1 — execution and quality gates
+  {
+    id: 'files',
+    label: 'Build',
+    description: 'Code, tests, CI changes and implementation work',
+    icon: '\u{1F6E0}\uFE0F',
+    color: 0x63ad68,
+    colStart: 0, colSpan: 6, rowStart: 1, rowSpan: 1,
     x: 0, y: 0, width: 0, height: 0,
   },
   {
     id: 'messaging',
-    label: 'Messaging',
-    description: 'SendMessage, Teams — Chat & relax',
-    icon: '\u{1F4AC}',
-    color: 0xec4899,
+    label: 'Review / Judge',
+    description: 'Review, validation, QA and final acceptance',
+    icon: '\u{2696}\uFE0F',
+    color: 0xe66f66,
+    colStart: 6, colSpan: 3, rowStart: 1, rowSpan: 1,
+    x: 0, y: 0, width: 0, height: 0,
+  },
+  {
+    id: 'web',
+    label: 'Security',
+    description: 'Security review, hardening, risk and compliance checks',
+    icon: '\u{1F6E1}\uFE0F',
+    color: 0x8c79c6,
     colStart: 9, colSpan: 3, rowStart: 1, rowSpan: 1,
     x: 0, y: 0, width: 0, height: 0,
   },
-  // Row 2
+
+  // Row 2 — platform operations and orchestration
+  {
+    id: 'terminal',
+    label: 'Deploy / Ops',
+    description: 'Platform, infrastructure, release and operations work',
+    icon: '\u{1F680}',
+    color: 0x4e98b8,
+    colStart: 0, colSpan: 4, rowStart: 2, rowSpan: 1,
+    x: 0, y: 0, width: 0, height: 0,
+  },
   {
     id: 'spawn',
-    label: 'Spawn',
-    description: 'Agent spawn/despawn — Entry portal',
-    icon: '\u{1F300}',
-    color: 0xa855f7,
-    colStart: 0, colSpan: 3, rowStart: 2, rowSpan: 1,
+    label: 'Orchestrate',
+    description: 'Agent spawning, delegation and multi-agent coordination',
+    icon: '\u{1F9ED}',
+    color: 0xd99955,
+    colStart: 4, colSpan: 4, rowStart: 2, rowSpan: 1,
     x: 0, y: 0, width: 0, height: 0,
   },
   {
     id: 'idle',
     label: 'Idle',
-    description: 'Idle agents rest here — Kitchen & lounge',
-    icon: '\u{2615}',
-    color: 0x6b7280,
-    colStart: 3, colSpan: 5, rowStart: 2, rowSpan: 1,
-    x: 0, y: 0, width: 0, height: 0,
-  },
-  {
-    id: 'tasks',
-    label: 'Tasks',
-    description: 'TaskCreate, TaskUpdate — Kanban & planning',
-    icon: '\u{1F4CB}',
-    color: 0x14b8a6,
+    description: 'Agents waiting for their next mission',
+    icon: '\u{1F4A4}',
+    color: 0x829477,
     colStart: 8, colSpan: 4, rowStart: 2, rowSpan: 1,
     x: 0, y: 0, width: 0, height: 0,
   },
