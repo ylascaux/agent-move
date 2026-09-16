@@ -2,62 +2,57 @@ import type { ZoneId } from '../types/zone.js';
 
 /** Tool name -> icon mapping for speech bubbles */
 export const TOOL_ICONS: Record<string, string> = {
-  Read: '\u{1F4D6}',       // open book
-  Write: '\u{270F}\uFE0F', // pencil
-  Edit: '\u{1F527}',       // wrench
-  Patch: '\u{1F527}',      // wrench (unified diff)
-  Bash: '\u{1F4BB}',       // terminal
-  Glob: '\u{1F50D}',       // search
-  Grep: '\u{1F50E}',       // search right
-  WebSearch: '\u{1F310}',  // globe
-  WebFetch: '\u{1F310}',   // globe
-  Agent: '\u{1F916}',      // robot
-  TeamCreate: '\u{1F465}', // people
-  SendMessage: '\u{1F4AC}',// speech
-  TaskCreate: '\u{1F4CB}', // clipboard
-  TaskUpdate: '\u{2705}',  // check
-  TodoRead: '\u{1F4CB}',   // clipboard
-  TodoWrite: '\u{2705}',   // check
-  AskUserQuestion: '\u{2753}', // question
-  EnterPlanMode: '\u{1F4DD}',  // memo
-  ExitPlanMode: '\u{1F4DD}',   // memo
+  Read: '\u{1F4D6}',
+  Write: '\u{270F}\uFE0F',
+  Edit: '\u{1F527}',
+  Patch: '\u{1F527}',
+  Bash: '\u{1F4BB}',
+  Glob: '\u{1F50D}',
+  Grep: '\u{1F50E}',
+  WebSearch: '\u{1F310}',
+  WebFetch: '\u{1F310}',
+  Agent: '\u{1F916}',
+  TeamCreate: '\u{1F465}',
+  SendMessage: '\u{1F4AC}',
+  TaskCreate: '\u{1F4CB}',
+  TaskUpdate: '\u{2705}',
+  TodoRead: '\u{1F4CB}',
+  TodoWrite: '\u{2705}',
+  AskUserQuestion: '\u{2753}',
+  EnterPlanMode: '\u{1F4DD}',
+  ExitPlanMode: '\u{1F4DD}',
 };
 
-/** Maps canonical tool names to activity zones */
+/**
+ * Base tool -> workflow room mapping.
+ *
+ * Historical ZoneId values are intentionally retained so persisted sessions and
+ * older clients keep working, while their visible meaning is now:
+ * files=Build, terminal=Deploy/Ops, search=Research, web=Security,
+ * thinking=Thinking, messaging=Review/Judge, tasks=Plan, idle=Idle,
+ * spawn=Orchestrate.
+ */
 export const TOOL_ZONE_MAP: Record<string, ZoneId> = {
-  // Files zone
-  Read: 'files',
+  // Build
   Write: 'files',
   Edit: 'files',
   Patch: 'files',
-  Glob: 'files',
   NotebookEdit: 'files',
+  Bash: 'files',
 
-  // Terminal zone
-  Bash: 'terminal',
-
-  // Search zone
+  // Research / evidence gathering
+  Read: 'search',
+  Glob: 'search',
   Grep: 'search',
   WebSearch: 'search',
+  WebFetch: 'search',
 
-  // Web zone
-  WebFetch: 'web',
-  mcp__chrome_devtools__navigate_page: 'web',
-  mcp__chrome_devtools__click: 'web',
-  mcp__chrome_devtools__fill: 'web',
-  mcp__chrome_devtools__take_screenshot: 'web',
-  mcp__chrome_devtools__take_snapshot: 'web',
-  mcp__chrome_devtools__evaluate_script: 'web',
-
-  // Thinking zone
-  EnterPlanMode: 'thinking',
-  ExitPlanMode: 'thinking',
+  // Thinking
   AskUserQuestion: 'thinking',
 
-  // Messaging zone
-  SendMessage: 'messaging',
-
-  // Tasks zone
+  // Plan
+  EnterPlanMode: 'tasks',
+  ExitPlanMode: 'tasks',
   TaskCreate: 'tasks',
   TaskUpdate: 'tasks',
   TaskList: 'tasks',
@@ -65,17 +60,112 @@ export const TOOL_ZONE_MAP: Record<string, ZoneId> = {
   TodoRead: 'tasks',
   TodoWrite: 'tasks',
 
-  // Spawn zone
+  // Orchestration / delegation
   Agent: 'spawn',
   TeamCreate: 'spawn',
   TeamDelete: 'spawn',
+  SendMessage: 'spawn',
 };
 
-/** Get the zone for a tool, defaulting to 'thinking' for unknown tools */
-export function getZoneForTool(toolName: string): ZoneId {
-  // Handle MCP tools with varying names — all route to web zone
-  if (toolName.startsWith('mcp__')) return 'web';
+export interface ZoneResolutionContext {
+  agentName?: string | null;
+  taskDescription?: string | null;
+  projectName?: string | null;
+  isPlanning?: boolean;
+}
+
+const SECURITY_RE = /\b(security|securit[eé]|vuln(?:erabilit(?:y|ies|e|és))?|cve|hardening|pentest|compliance|risk|trivy|gitleaks|semgrep|checkov|tfsec|snyk|osv)\b/i;
+const REVIEW_RE = /\b(review(?:er)?|judge|critic|validator|validation|quality|qa|acceptance|approve|approval)\b/i;
+const ORCHESTRATE_RE = /\b(orchestr(?:ator|ate|ation)?|coordinat(?:or|e|ion)?|supervisor|dispatcher)\b/i;
+const PLAN_RE = /\b(plan(?:ner|ning)?|architect(?:ure)?|design|spec(?:ification)?s?)\b/i;
+const RESEARCH_RE = /\b(research(?:er)?|investigat(?:e|ion|or)?|analyst|analysis|discovery|evidence|benchmark)\b/i;
+const DEPLOY_RE = /\b(deploy(?:ment)?|platform|infra(?:structure)?|sre|operations|ops|release|kubernetes|k8s|terraform|terragrunt|argocd|helm|ansible|pulumi|cloudformation|kubectl)\b/i;
+const BUILD_RE = /\b(writer|builder|build|coder|developer|implementation?|implement(?:er|ation)?|engineer|refactor|fix)\b/i;
+const SECURITY_COMMAND_RE = /\b(trivy|gitleaks|semgrep|checkov|tfsec|snyk|osv-scanner|npm\s+audit|pnpm\s+audit|yarn\s+audit|cargo\s+audit)\b/i;
+const DEPLOY_COMMAND_RE = /\b(terraform|terragrunt|kubectl|helm|argocd|ansible|pulumi|cloudformation|cdk|docker\s+compose\s+(?:up|down|pull|restart)|deploy|release)\b/i;
+
+function stringifyInput(input: unknown): string {
+  if (input == null) return '';
+  if (typeof input === 'string') return input;
+  try {
+    return JSON.stringify(input);
+  } catch {
+    return String(input);
+  }
+}
+
+/**
+ * Explicit agent identities are the strongest signal. This is deliberately
+ * separate from the task text: an orchestrator reviewing results is still an
+ * orchestrator, and a writer producing security documentation is still Build.
+ */
+function getNamedAgentZone(agentName?: string | null): ZoneId | null {
+  if (!agentName) return null;
+  if (ORCHESTRATE_RE.test(agentName)) return 'spawn';
+  if (SECURITY_RE.test(agentName)) return 'web';
+  if (REVIEW_RE.test(agentName)) return 'messaging';
+  if (PLAN_RE.test(agentName)) return 'tasks';
+  if (RESEARCH_RE.test(agentName)) return 'search';
+  if (DEPLOY_RE.test(agentName)) return 'terminal';
+  if (BUILD_RE.test(agentName)) return 'files';
+  return null;
+}
+
+function getTaskZone(taskDescription?: string | null): ZoneId | null {
+  if (!taskDescription) return null;
+  if (SECURITY_RE.test(taskDescription)) return 'web';
+  if (REVIEW_RE.test(taskDescription)) return 'messaging';
+  if (ORCHESTRATE_RE.test(taskDescription)) return 'spawn';
+  if (PLAN_RE.test(taskDescription)) return 'tasks';
+  if (RESEARCH_RE.test(taskDescription)) return 'search';
+  if (DEPLOY_RE.test(taskDescription)) return 'terminal';
+  if (BUILD_RE.test(taskDescription)) return 'files';
+  return null;
+}
+
+/**
+ * Resolve the room from both the current tool and the agent's mission.
+ *
+ * This is intentionally heuristic: OpenCode/Claude/Codex expose different
+ * event shapes, but all of them eventually provide a normalized tool plus
+ * enough identity/task context for useful workflow classification.
+ */
+export function getZoneForActivity(
+  toolName: string,
+  toolInput?: unknown,
+  context: ZoneResolutionContext = {},
+): ZoneId {
+  // Named OpenCode/toolkit roles are authoritative when available.
+  const namedZone = getNamedAgentZone(context.agentName);
+  if (namedZone) return namedZone;
+
+  // Explicit planning state wins over incidental reads/writes for unnamed agents.
+  if (context.isPlanning || toolName === 'EnterPlanMode' || toolName === 'ExitPlanMode') return 'tasks';
+
+  const inputText = stringifyInput(toolInput);
+
+  // Concrete shell commands are higher-confidence than prose in the task.
+  if (toolName === 'Bash' && SECURITY_COMMAND_RE.test(inputText)) return 'web';
+  if (toolName === 'Bash' && DEPLOY_COMMAND_RE.test(inputText)) return 'terminal';
+
+  // Fall back to the mission assigned by the parent/orchestrator.
+  const taskZone = getTaskZone(context.taskDescription);
+  if (taskZone) return taskZone;
+
+  // Multi-agent primitives are orchestration, not generic messaging.
+  if (toolName === 'Agent' || toolName === 'TeamCreate' || toolName === 'TeamDelete' || toolName === 'SendMessage') {
+    return 'spawn';
+  }
+
+  // Browser/MCP calls are research unless a specialist identity above says otherwise.
+  if (toolName.startsWith('mcp__')) return 'search';
+
   return TOOL_ZONE_MAP[toolName] ?? 'thinking';
+}
+
+/** Compatibility helper used by fast hook previews and older call sites. */
+export function getZoneForTool(toolName: string): ZoneId {
+  return getZoneForActivity(toolName);
 }
 
 /**

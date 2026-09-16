@@ -1,5 +1,5 @@
 import type { AgentState, ActivityEntry } from '@agent-move/shared';
-import { getZoneForTool } from '@agent-move/shared';
+import { getZoneForActivity } from '@agent-move/shared';
 import type { ParsedActivity } from '../watcher/types.js';
 import { getGitBranch } from '../watcher/git-info.js';
 import type { AnomalyDetector } from './anomaly-detector.js';
@@ -73,7 +73,24 @@ function processToolUseActivity(
   const prevZone = agent.currentZone;
   agent.currentTool = activity.toolName ?? null;
   agent.currentActivity = summarizeToolInput(activity.toolInput) || null;
-  agent.currentZone = getZoneForTool(activity.toolName ?? '');
+
+  // Keep planning state available to the semantic room resolver. ExitPlanMode
+  // itself is still shown in Plan, then the next activity leaves that room.
+  if (toolName === 'EnterPlanMode') {
+    agent.isPlanning = true;
+  }
+
+  agent.currentZone = getZoneForActivity(toolName, activity.toolInput, {
+    agentName: agent.agentName,
+    taskDescription: agent.taskDescription,
+    projectName: agent.projectName,
+    isPlanning: agent.isPlanning || toolName === 'ExitPlanMode',
+  });
+
+  if (toolName === 'ExitPlanMode') {
+    agent.isPlanning = false;
+  }
+
   agent.toolUseCount++;
 
   // Anomaly & analytics tracking
@@ -110,12 +127,6 @@ function processToolUseActivity(
     }
   }
 
-  if (activity.toolName === 'EnterPlanMode') {
-    agent.isPlanning = true;
-  } else if (activity.toolName === 'ExitPlanMode') {
-    agent.isPlanning = false;
-  }
-
   if (activity.toolName === 'TeamCreate' && activity.toolInput) {
     agent.teamName = (activity.toolInput as Record<string, unknown>).team_name as string ?? null;
     agent.role = 'team-lead';
@@ -128,7 +139,6 @@ function processToolUseActivity(
   }
 
   if (activity.toolName === 'SendMessage') {
-    agent.currentZone = 'messaging';
     if (activity.toolInput) {
       const input = activity.toolInput as Record<string, unknown>;
       const recipient = input.recipient as string | undefined;
