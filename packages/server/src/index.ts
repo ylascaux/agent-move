@@ -17,6 +17,8 @@ import { registerApiRoutes } from './routes/api.js';
 import { registerSessionRoutes } from './routes/sessions-api.js';
 import { SessionRecorder } from './storage/session-recorder.js';
 import { HookEventManager } from './hooks/hook-event-manager.js';
+import { RemoteAgentStore } from './remote/remote-agent-store.js';
+import { RemoteSourceWatcher } from './remote/remote-source-watcher.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -35,12 +37,13 @@ export async function main() {
   });
 
   const stateManager = new AgentStateManager();
+  const remoteStore = new RemoteAgentStore();
   const sessionRecorder = new SessionRecorder(stateManager);
   const hookManager = new HookEventManager(stateManager);
-  const broadcaster = new Broadcaster(stateManager, hookManager);
+  const broadcaster = new Broadcaster(stateManager, hookManager, remoteStore);
 
   registerWsHandler(app, stateManager, broadcaster, hookManager);
-  registerApiRoutes(app, stateManager);
+  registerApiRoutes(app, stateManager, remoteStore);
   registerSessionRoutes(app, sessionRecorder, stateManager);
 
   // Hook endpoint: receives Claude Code hook events via POST /hook
@@ -67,14 +70,43 @@ export async function main() {
     reply.sendFile('index.html');
   });
 
-  // Build and start all agent watchers
-  // To add a new agent type: implement AgentWatcher and push it here
-  const watchers: AgentWatcher[] = [
-    new FileWatcher(config.claudeHome, stateManager),
-    ...(config.enableOpenCode ? [new OpenCodeWatcher(stateManager)] : []),
-    ...(config.enablePi ? [new PiWatcher(stateManager)] : []),
-    ...(config.enableCodex ? [new CodexWatcher(stateManager)] : []),
-  ];
+  // Build and start all local agent watchers.
+  // Docker deployments normally provide explicit read-only mounts under /sources.
+  const watchers: AgentWatcher[] = [];
+
+  if (config.enableClaude) {
+    watchers.push(new FileWatcher(config.claudeHome, stateManager));
+  }
+
+  if (config.enableOpenCode) {
+    if (config.openCodeSources.length > 0) {
+      for (const source of config.openCodeSources) {
+        watchers.push(new OpenCodeWatcher(stateManager, {
+          dbPath: source.dbPath,
+          sourceId: source.id,
+          sourceName: source.id,
+          runtime: 'docker',
+        }));
+      }
+    } else {
+      watchers.push(new OpenCodeWatcher(stateManager));
+    }
+  }
+
+  if (config.enablePi) watchers.push(new PiWatcher(stateManager));
+  if (config.enableCodex) watchers.push(new CodexWatcher(stateManager));
+
+  // Remote nodes are intentionally separate from the local state machine.
+  // A hub can aggregate any number of Docker collectors through their /api/state endpoint.
+  for (const remote of config.remoteSources) {
+    watchers.push(new RemoteSourceWatcher(
+      remote.id,
+      remote.url,
+      remoteStore,
+      config.remotePollMs,
+    ));
+  }
+
   for (const w of watchers) {
     await w.start();
   }
@@ -86,7 +118,7 @@ export async function main() {
   let actualPort = config.port;
   for (let attempt = 0; attempt < 10; attempt++) {
     try {
-      await app.listen({ port: actualPort, host: '127.0.0.1' });
+      await app.listen({ port: actualPort, host: config.host });
       break;
     } catch (err: any) {
       if (err.code === 'EADDRINUSE' && attempt < 9) {
@@ -96,7 +128,7 @@ export async function main() {
       throw err;
     }
   }
-  console.log(`Server listening on http://localhost:${actualPort}`);
+  console.log(`Server listening on http://${config.host}:${actualPort}`);
 
   // Graceful shutdown
   const shutdown = async () => {
