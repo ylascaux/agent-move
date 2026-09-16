@@ -94,13 +94,33 @@ function stringifyInput(input: unknown): string {
   }
 }
 
-function roleText(context: ZoneResolutionContext): string {
-  // Agent identity and assigned mission are stronger signals than the current
-  // low-level tool. A judge reading a file is still judging; a security agent
-  // running Bash is still doing security work.
-  return [context.agentName, context.taskDescription]
-    .filter((value): value is string => Boolean(value))
-    .join(' ');
+/**
+ * Explicit agent identities are the strongest signal. This is deliberately
+ * separate from the task text: an orchestrator reviewing results is still an
+ * orchestrator, and a writer producing security documentation is still Build.
+ */
+function getNamedAgentZone(agentName?: string | null): ZoneId | null {
+  if (!agentName) return null;
+  if (ORCHESTRATE_RE.test(agentName)) return 'spawn';
+  if (SECURITY_RE.test(agentName)) return 'web';
+  if (REVIEW_RE.test(agentName)) return 'messaging';
+  if (PLAN_RE.test(agentName)) return 'tasks';
+  if (RESEARCH_RE.test(agentName)) return 'search';
+  if (DEPLOY_RE.test(agentName)) return 'terminal';
+  if (BUILD_RE.test(agentName)) return 'files';
+  return null;
+}
+
+function getTaskZone(taskDescription?: string | null): ZoneId | null {
+  if (!taskDescription) return null;
+  if (SECURITY_RE.test(taskDescription)) return 'web';
+  if (REVIEW_RE.test(taskDescription)) return 'messaging';
+  if (ORCHESTRATE_RE.test(taskDescription)) return 'spawn';
+  if (PLAN_RE.test(taskDescription)) return 'tasks';
+  if (RESEARCH_RE.test(taskDescription)) return 'search';
+  if (DEPLOY_RE.test(taskDescription)) return 'terminal';
+  if (BUILD_RE.test(taskDescription)) return 'files';
+  return null;
 }
 
 /**
@@ -115,24 +135,22 @@ export function getZoneForActivity(
   toolInput?: unknown,
   context: ZoneResolutionContext = {},
 ): ZoneId {
-  const mission = roleText(context);
-  const inputText = stringifyInput(toolInput);
-  const combined = `${mission} ${inputText}`;
+  // Named OpenCode/toolkit roles are authoritative when available.
+  const namedZone = getNamedAgentZone(context.agentName);
+  if (namedZone) return namedZone;
 
-  // Strong specialist identities keep their room while using ordinary tools.
-  if (REVIEW_RE.test(mission)) return 'messaging';
-  if (SECURITY_RE.test(mission)) return 'web';
-  if (ORCHESTRATE_RE.test(mission)) return 'spawn';
-
-  // Explicit planning state wins over incidental reads/writes.
+  // Explicit planning state wins over incidental reads/writes for unnamed agents.
   if (context.isPlanning || toolName === 'EnterPlanMode' || toolName === 'ExitPlanMode') return 'tasks';
 
-  // Specialist task descriptions and shell commands.
-  if (SECURITY_RE.test(combined) || (toolName === 'Bash' && SECURITY_COMMAND_RE.test(inputText))) return 'web';
-  if (DEPLOY_RE.test(combined) || (toolName === 'Bash' && DEPLOY_COMMAND_RE.test(inputText))) return 'terminal';
-  if (PLAN_RE.test(mission)) return 'tasks';
-  if (RESEARCH_RE.test(mission)) return 'search';
-  if (BUILD_RE.test(mission)) return 'files';
+  const inputText = stringifyInput(toolInput);
+
+  // Concrete shell commands are higher-confidence than prose in the task.
+  if (toolName === 'Bash' && SECURITY_COMMAND_RE.test(inputText)) return 'web';
+  if (toolName === 'Bash' && DEPLOY_COMMAND_RE.test(inputText)) return 'terminal';
+
+  // Fall back to the mission assigned by the parent/orchestrator.
+  const taskZone = getTaskZone(context.taskDescription);
+  if (taskZone) return taskZone;
 
   // Multi-agent primitives are orchestration, not generic messaging.
   if (toolName === 'Agent' || toolName === 'TeamCreate' || toolName === 'TeamDelete' || toolName === 'SendMessage') {
