@@ -1,6 +1,13 @@
 import { EventEmitter } from 'events';
 import type { AgentEvent, AgentState } from '@agent-move/shared';
 
+export interface RemoteSourceStatus {
+  id: string;
+  name: string;
+  lastSeen: number;
+  agentCount: number;
+}
+
 /**
  * Keeps remote AgentMove snapshots separate from the local state machine.
  * Remote agent ids are namespaced so two hosts can safely expose identical
@@ -10,10 +17,22 @@ export class RemoteAgentStore extends EventEmitter {
   private agents = new Map<string, AgentState>();
   private sourceAgents = new Map<string, Set<string>>();
   private sourceLastSeen = new Map<string, number>();
+  private sourceNames = new Map<string, string>();
   private expiryTimer: ReturnType<typeof setInterval> | null = null;
 
   getAll(): AgentState[] {
     return Array.from(this.agents.values());
+  }
+
+  getSources(): RemoteSourceStatus[] {
+    return Array.from(this.sourceLastSeen.entries())
+      .map(([id, lastSeen]) => ({
+        id,
+        name: this.sourceNames.get(id) ?? id,
+        lastSeen,
+        agentCount: this.sourceAgents.get(id)?.size ?? 0,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   replaceSource(sourceId: string, sourceName: string, incoming: AgentState[]): void {
@@ -22,6 +41,7 @@ export class RemoteAgentStore extends EventEmitter {
     const now = Date.now();
 
     this.sourceLastSeen.set(sourceId, now);
+    this.sourceNames.set(sourceId, sourceName);
 
     for (const raw of incoming) {
       const agent = this.namespaceAgent(sourceId, sourceName, raw);
@@ -80,6 +100,7 @@ export class RemoteAgentStore extends EventEmitter {
 
     this.sourceAgents.delete(sourceId);
     this.sourceLastSeen.delete(sourceId);
+    this.sourceNames.delete(sourceId);
   }
 
   startExpiry(ttlMs: number): void {
