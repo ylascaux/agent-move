@@ -28,7 +28,7 @@ jobs:
             -e AGENT_MOVE_CODEX=false \
             -e AGENT_MOVE_PI=false \
             -e AGENT_MOVE_INGEST_TOKEN=test-token \
-            -e AGENT_MOVE_REMOTE_TTL_MS=2000 \
+            -e AGENT_MOVE_REMOTE_TTL_MS=3000 \
             agent-move:ci
 
           for attempt in $(seq 1 20); do
@@ -49,7 +49,36 @@ jobs:
             --data '{"name":"CI node","agents":[]}')
           test "$status" = "401"
 
-          # Authenticated snapshot must appear in the hub's aggregated state.
+          # Run a real collector container. It has no published port and can only
+          # reach the hub outbound through host.docker.internal.
+          docker run -d --name agent-move-collector-ci \
+            --add-host host.docker.internal:host-gateway \
+            -e AGENT_MOVE_HOST=127.0.0.1 \
+            -e AGENT_MOVE_CLAUDE=false \
+            -e AGENT_MOVE_OPENCODE=false \
+            -e AGENT_MOVE_CODEX=false \
+            -e AGENT_MOVE_PI=false \
+            -e AGENT_MOVE_NODE_ID=ci-collector \
+            -e 'AGENT_MOVE_NODE_NAME=CI collector' \
+            -e AGENT_MOVE_PUSH_URL=http://host.docker.internal:3333 \
+            -e AGENT_MOVE_PUSH_TOKEN=test-token \
+            -e AGENT_MOVE_PUSH_INTERVAL_MS=500 \
+            agent-move:ci
+
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent http://127.0.0.1:3333/api/sources | grep -q 'ci-collector'; then
+              break
+            fi
+            if [ "$attempt" = "20" ]; then
+              echo 'collector never appeared on hub'
+              docker logs agent-move-ci
+              docker logs agent-move-collector-ci
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # Authenticated snapshot with an agent must be namespaced in hub state.
           curl --fail --silent \
             -X POST http://127.0.0.1:3333/api/ingest/ci-node \
             -H 'authorization: Bearer test-token' \
@@ -58,8 +87,16 @@ jobs:
 
           curl --fail --silent http://127.0.0.1:3333/api/state | grep -q 'remote:ci-node:oc:local:test'
 
-          # Stale collectors must be removed automatically.
-          sleep 4
+          # Once a collector disappears, its source and agents must expire.
+          docker rm -f agent-move-collector-ci
+          sleep 5
+
+          if curl --fail --silent http://127.0.0.1:3333/api/sources | grep -q 'ci-collector'; then
+            echo 'stale collector source was not expired'
+            docker logs agent-move-ci
+            exit 1
+          fi
+
           if curl --fail --silent http://127.0.0.1:3333/api/state | grep -q 'remote:ci-node:oc:local:test'; then
             echo 'stale remote agent was not expired'
             docker logs agent-move-ci
@@ -68,4 +105,6 @@ jobs:
 
       - name: Stop Docker smoke test
         if: always()
-        run: docker rm -f agent-move-ci || true
+        run: |
+          docker rm -f agent-move-collector-ci || true
+          docker rm -f agent-move-ci || true
