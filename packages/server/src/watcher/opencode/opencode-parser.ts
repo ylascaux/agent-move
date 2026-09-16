@@ -7,9 +7,19 @@ export interface OpenCodeMessageData {
   id: string;
   sessionID: string;
   role: 'assistant' | 'user';
+  /** OpenCode fills this when an assistant message/step has finished. */
+  finish?: string;
+  /** Native provider/OpenCode cost when available. AgentMove currently derives UI cost from tokens. */
+  cost?: number;
+  time?: {
+    created?: number;
+    completed?: number;
+  };
   tokens?: {
+    total?: number;
     input?: number;
     output?: number;
+    reasoning?: number;
     cache?: { read?: number; write?: number };
   };
   modelID?: string;
@@ -104,20 +114,42 @@ export class OpenCodeParser {
   }
 
   /**
-   * Emit token usage from an assistant message row.
-   * Called once per assistant message.
+   * Emit final token usage from an assistant message row.
+   *
+   * OpenCode inserts the assistant row before generation has finished and updates
+   * that same row as usage becomes available. Counting the first non-final version
+   * makes live input/cache/cost metrics freeze at zero or a partial value. Current
+   * OpenCode messages expose `finish` and/or `time.completed`; legacy rows without
+   * either completion shape are still treated as final for backwards compatibility.
    */
   parseTokenUsage(messageData: OpenCodeMessageData): ParsedActivity | null {
     if (messageData.role !== 'assistant') return null;
+
+    const hasCompletionShape = messageData.time !== undefined ||
+      Object.prototype.hasOwnProperty.call(messageData, 'finish');
+    const isComplete = Boolean(messageData.finish || messageData.time?.completed);
+    if (hasCompletionShape && !isComplete) return null;
+
     const t = messageData.tokens;
-    if (!t?.input && !t?.output) return null;
+    if (!t) return null;
+
+    const input = t.input ?? 0;
+    const output = t.output ?? 0;
+    const reasoning = t.reasoning ?? 0;
+    const cacheRead = t.cache?.read ?? 0;
+    const cacheWrite = t.cache?.write ?? 0;
+
+    if (input === 0 && output === 0 && reasoning === 0 && cacheRead === 0 && cacheWrite === 0) {
+      return null;
+    }
 
     return {
       type: 'token_usage',
-      inputTokens: t.input,
-      outputTokens: t.output,
-      cacheReadTokens: t.cache?.read,
-      cacheCreationTokens: t.cache?.write,
+      inputTokens: input,
+      // OpenCode reports reasoning separately; it is billed at the output rate.
+      outputTokens: output + reasoning,
+      cacheReadTokens: cacheRead,
+      cacheCreationTokens: cacheWrite,
       model: messageData.modelID,
       agentName: messageData.agent,
     };
