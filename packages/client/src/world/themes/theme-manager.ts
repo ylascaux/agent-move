@@ -16,6 +16,16 @@ export class ThemeManager {
   private _onChange: ((theme: Theme) => void) | null = null;
 
   constructor() {
+    // The legacy selector is static HTML. Add the new option here so the theme
+    // can be selected again after switching to one of the legacy themes.
+    const select = document.getElementById('theme-select') as HTMLSelectElement | null;
+    if (select && !select.querySelector('option[value="pokemon-gbc"]')) {
+      const option = document.createElement('option');
+      option.value = 'pokemon-gbc';
+      option.textContent = 'Pokémon GBC';
+      select.prepend(option);
+    }
+
     const savedId = storageGet<string>(STORAGE_KEY, 'pokemon-gbc');
     this._current = ALL_THEMES.find(t => t.id === savedId) ?? pokemonGbcTheme;
   }
