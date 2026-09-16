@@ -19,22 +19,53 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: docker build -t agent-move:ci .
-      - name: Smoke test Docker image
+
+      - name: Smoke test Docker hub and push ingestion
         run: |
           docker run -d --name agent-move-ci -p 3333:3333 \
             -e AGENT_MOVE_CLAUDE=false \
             -e AGENT_MOVE_OPENCODE=false \
             -e AGENT_MOVE_CODEX=false \
             -e AGENT_MOVE_PI=false \
+            -e AGENT_MOVE_INGEST_TOKEN=test-token \
+            -e AGENT_MOVE_REMOTE_TTL_MS=2000 \
             agent-move:ci
+
           for attempt in $(seq 1 20); do
             if curl --fail --silent http://127.0.0.1:3333/api/health; then
-              exit 0
+              break
+            fi
+            if [ "$attempt" = "20" ]; then
+              docker logs agent-move-ci
+              exit 1
             fi
             sleep 1
           done
-          docker logs agent-move-ci
-          exit 1
+
+          # Ingest must reject unauthenticated collectors.
+          status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            -X POST http://127.0.0.1:3333/api/ingest/ci-node \
+            -H 'content-type: application/json' \
+            --data '{"name":"CI node","agents":[]}')
+          test "$status" = "401"
+
+          # Authenticated snapshot must appear in the hub's aggregated state.
+          curl --fail --silent \
+            -X POST http://127.0.0.1:3333/api/ingest/ci-node \
+            -H 'authorization: Bearer test-token' \
+            -H 'content-type: application/json' \
+            --data '{"name":"CI node","agents":[{"id":"oc:local:test","sessionId":"oc:local:test","rootSessionId":"oc:local:test","parentId":null,"source":{"id":"local","name":"Local","kind":"local","runtime":"docker"}}]}'
+
+          curl --fail --silent http://127.0.0.1:3333/api/state | grep -q 'remote:ci-node:oc:local:test'
+
+          # Stale collectors must be removed automatically.
+          sleep 4
+          if curl --fail --silent http://127.0.0.1:3333/api/state | grep -q 'remote:ci-node:oc:local:test'; then
+            echo 'stale remote agent was not expired'
+            docker logs agent-move-ci
+            exit 1
+          fi
+
       - name: Stop Docker smoke test
         if: always()
         run: docker rm -f agent-move-ci || true
