@@ -279,16 +279,18 @@ export class OpenCodeWatcher implements AgentWatcher {
       return;
     }
 
-    // Cache message so parts can find their parent context
+    // Cache every revision so parts can find the latest parent context.
     this.messages.set(row.id, data);
 
-    // Emit token_usage once per assistant message row
+    // OpenCode creates an assistant row before usage is finalized, then updates
+    // that same row. Do not mark it as consumed until parseTokenUsage sees the
+    // finalized usage; otherwise live token/cache/cost metrics freeze at zero.
     const seenKey = 'msg:' + row.id;
     if (this.seenIds.has(seenKey)) return;
-    this.seenIds.add(seenKey);
 
     const activity = this.parser.parseTokenUsage(data);
     if (!activity) return;
+    this.seenIds.add(seenKey);
 
     // Cancel any pending timers — real activity from this session
     const prefixedId = this.prefixed(row.session_id);
