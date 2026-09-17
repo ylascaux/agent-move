@@ -273,16 +273,42 @@ const decorators: Record<ZoneId, ZoneDecoratorFn> = {
     px(g, cx + P(9), cy, Math.max(P(3), x + w - cx - P(21)), PX, C.blue);
   },
 
-  // Idle: quiet center/lounge.
+  // Idle: outdoor grassy clearing where inactive agents can rest.
   idle: (g, x, y, w, h) => {
-    outlineBox(g, x + P(2), y + P(3), Math.min(P(25), w * 0.5), P(9), C.cream);
-    px(g, x + P(4), y + P(6), Math.min(P(19), w * 0.38), P(2), C.red);
-    for (let i = 0; i < 2; i++) {
-      const sx = x + w * (0.55 + i * 0.18);
-      px(g, sx, y + h * 0.55, P(8), P(4), C.ink);
-      px(g, sx + PX, y + h * 0.55 + PX, P(6), P(2), C.blue);
+    // Paint over the default indoor floor so Idle reads as an outdoor zone.
+    px(g, x, y, w, h, C.grass);
+
+    // GBC-style grass variation and tufts.
+    for (let gy = y; gy < y + h; gy += P(4)) {
+      for (let gx = x; gx < x + w; gx += P(4)) {
+        const seed = (Math.floor(gx / P(4)) * 11 + Math.floor(gy / P(4)) * 7) % 9;
+        if (seed === 0 || seed === 4) px(g, gx + PX, gy + P(2), P(2), PX, C.grassDark);
+        if (seed === 6) px(g, gx + P(2), gy + PX, PX, P(2), C.grassLight);
+      }
     }
-    drawPlant(g, x + w - P(10), y + P(3));
+
+    // Small sandy footpath into the clearing.
+    const pathW = Math.min(P(12), w * 0.28);
+    const pathX = x + (w - pathW) / 2;
+    const pathH = Math.min(P(10), h * 0.28);
+    px(g, pathX, y + h - pathH, pathW, pathH, C.path);
+    px(g, pathX, y + h - pathH, PX, pathH, C.pathDark);
+    px(g, pathX + pathW - PX, y + h - pathH, PX, pathH, C.pathDark);
+
+    // Trees create a quiet clearing without crowding the agents.
+    if (w >= P(28) && h >= P(18)) {
+      drawTree(g, x + P(6), y + P(6), 0);
+      drawTree(g, x + w - P(6), y + P(7), 1);
+    }
+
+    // A few deterministic flowers around the edges.
+    const flowerColors = [C.red, C.yellow, C.violet, C.white];
+    const positions = [
+      [0.18, 0.72], [0.28, 0.22], [0.72, 0.28], [0.82, 0.68], [0.42, 0.76], [0.62, 0.18],
+    ] as const;
+    positions.forEach(([fx, fy], index) => {
+      drawFlower(g, x + w * fx, y + h * fy, flowerColors[index % flowerColors.length]);
+    });
   },
 
   // Plan: roadmap board and planning workstations.
