@@ -34,6 +34,10 @@ function parseNamedValues(raw: string | undefined): Array<{ id: string; value: s
     });
 }
 
+function normalizeSecret(raw: string | undefined): string {
+  return raw?.trim() ?? '';
+}
+
 const openCodeSources: OpenCodeSourceConfig[] = parseNamedValues(
   process.env.AGENT_MOVE_OPENCODE_SOURCES,
 ).map(({ id, value }) => ({ id, dbPath: value }));
@@ -74,11 +78,11 @@ export const config = {
   pushUrl,
   nodeId,
   nodeName: process.env.AGENT_MOVE_NODE_NAME || nodeId,
-  pushToken: process.env.AGENT_MOVE_PUSH_TOKEN || '',
+  pushToken: normalizeSecret(process.env.AGENT_MOVE_PUSH_TOKEN),
   pushIntervalMs: Math.max(500, parseInt(process.env.AGENT_MOVE_PUSH_INTERVAL_MS || '1000', 10)),
 
   /** Optional Bearer token required by the hub ingest endpoint. */
-  ingestToken: process.env.AGENT_MOVE_INGEST_TOKEN || '',
+  ingestToken: normalizeSecret(process.env.AGENT_MOVE_INGEST_TOKEN),
   /** Remove remote snapshots when a collector stops refreshing them. */
   remoteTtlMs: Math.max(2000, parseInt(process.env.AGENT_MOVE_REMOTE_TTL_MS || '15000', 10)),
 } as const;

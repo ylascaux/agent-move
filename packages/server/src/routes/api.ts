@@ -11,11 +11,18 @@ interface IngestBody {
 }
 
 function bearerAuthorized(header: string | undefined, token: string): boolean {
-  if (!token) return true;
+  const expectedToken = token.trim();
+  if (!expectedToken) return true;
   if (!header) return false;
 
-  const expected = Buffer.from(`Bearer ${token}`);
-  const actual = Buffer.from(header);
+  // Parse the auth scheme instead of comparing the whole HTTP header byte-for-byte.
+  // HTTP stacks may normalize optional whitespace around header values.
+  const match = header.match(/^\s*Bearer\s+(.+?)\s*$/i);
+  if (!match) return false;
+
+  const providedToken = match[1].trim();
+  const expected = Buffer.from(expectedToken);
+  const actual = Buffer.from(providedToken);
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
