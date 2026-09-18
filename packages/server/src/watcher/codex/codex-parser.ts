@@ -106,8 +106,38 @@ export class CodexParser {
       };
     }
 
-    // Skip response_item/message — assistant text is handled by event_msg/agent_message
-    // (agent_message always precedes the assistant message and carries the actual text)
+    // Codex Desktop custom tool call. Newer desktop builds wrap the actual
+    // tool name in payload.name (for example "exec") instead of encoding it
+    // in payload.type. Preserve the raw input as useful activity context.
+    if (itemType === 'custom_tool_call') {
+      const rawName = typeof payload.name === 'string' ? payload.name : 'custom_tool';
+      const rawInput = payload.input;
+      let toolInput: Record<string, unknown> = {};
+
+      if (typeof rawInput === 'string') {
+        try {
+          const parsed = JSON.parse(rawInput);
+          toolInput = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? parsed as Record<string, unknown>
+            : { input: rawInput };
+        } catch {
+          toolInput = { command: rawInput };
+        }
+      } else if (rawInput && typeof rawInput === 'object' && !Array.isArray(rawInput)) {
+        toolInput = rawInput as Record<string, unknown>;
+      }
+
+      return {
+        type: 'tool_use',
+        toolName: normalizeToolName(rawName),
+        toolInput: normalizeToolInput(toolInput),
+        model: model ?? undefined,
+      };
+    }
+
+    // Skip response_item/message — assistant text is handled by event_msg.
+    // Older Codex builds emit agent_message; newer Desktop builds emit
+    // event_msg/item_completed with an AgentMessage item.
 
     // Native tool calls (web_search_call, file_search_call, code_interpreter_call, etc.)
     if (itemType.endsWith('_call') && itemType !== 'function_call') {
@@ -125,14 +155,72 @@ export class CodexParser {
       };
     }
 
-    // Skip response_item/reasoning — already handled by event_msg/agent_reasoning
-    // (agent_reasoning always precedes reasoning in the stream and carries the same text)
+    // response_item/reasoning is encrypted/no-text in current Codex Desktop.
+    // Its paired event_msg/item_completed event is handled below.
 
     return null;
   }
 
   private parseEventMsg(payload: Record<string, unknown>, model: string | null): ParsedActivity | null {
     const eventType = payload.type as string;
+
+    // Codex Desktop emits task_started before any legacy agent_reasoning or
+    // function_call event. Treat it as activity so a newly-started task is
+    // visible immediately instead of waiting for a later parseable event.
+    if (eventType === 'task_started') {
+      return {
+        type: 'tool_use',
+        toolName: 'thinking',
+        toolInput: { state: 'task_started' },
+        model: model ?? undefined,
+      };
+    }
+
+    // Newer Codex Desktop builds wrap completed reasoning/messages in
+    // event_msg/item_completed.
+    if (eventType === 'item_completed') {
+      const item = payload.item as Record<string, unknown> | undefined;
+      const itemType = item?.type as string | undefined;
+
+      if (itemType === 'Reasoning') {
+        const summary = item?.summary_text;
+        const text = Array.isArray(summary)
+          ? summary.filter((v): v is string => typeof v === 'string').join(' ').trim()
+          : '';
+
+        return {
+          type: 'tool_use',
+          toolName: 'thinking',
+          toolInput: text ? { thought: text.slice(0, 120) } : { state: 'reasoning' },
+          model: model ?? undefined,
+        };
+      }
+
+      if (itemType === 'AgentMessage') {
+        const content = item?.content;
+        if (Array.isArray(content)) {
+          const text = content
+            .map((part) => {
+              if (!part || typeof part !== 'object') return '';
+              const value = (part as Record<string, unknown>).text;
+              return typeof value === 'string' ? value : '';
+            })
+            .filter(Boolean)
+            .join('\n')
+            .trim();
+
+          if (text) {
+            return {
+              type: 'text',
+              text: text.length < 200 ? text : text.slice(0, 197) + '...',
+              model: model ?? undefined,
+            };
+          }
+        }
+      }
+
+      return null;
+    }
 
     // Token count
     if (eventType === 'token_count') {
