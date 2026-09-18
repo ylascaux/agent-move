@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import type { AgentSource } from '@agent-move/shared';
 import type { AgentStateManager } from '../../state/agent-state-manager.js';
 import { createFallbackSession } from '../types.js';
-import type { SessionInfo } from '../types.js';
+import type { SessionInfo, ParsedActivity } from '../types.js';
 import { config } from '../../config.js';
 import {
   getOpenCodeDbPath,
@@ -18,6 +18,8 @@ interface MessageRow {
   session_id: string;
   time_updated: number;
   data: string;
+  type?: string;
+  seq?: number;
 }
 
 interface PartRow {
@@ -56,6 +58,8 @@ export class OpenCodeWatcher implements AgentWatcher {
   private db: Database.Database | null = null;
   private parser = new OpenCodeParser();
   private readonly source?: AgentSource;
+  /** True when the freshest OpenCode data is stored in the V2 projection tables. */
+  private useV2 = false;
 
   /** Timestamp watermark for incremental polling (ms) */
   private lastMessageTs = 0;
@@ -178,24 +182,65 @@ export class OpenCodeWatcher implements AgentWatcher {
 
   private prepareStatements() {
     const db = this.db!;
+
+    // OpenCode 2 beta keeps the legacy V1 tables for compatibility, while new
+    // activity is projected into session_v2/session_message. Pick whichever
+    // session table is freshest so old OpenCode installations keep working.
+    const tables = new Set(
+      (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>)
+        .map((row) => row.name),
+    );
+    const hasV2 = tables.has('session_v2') && tables.has('session_message');
+    const latestV1 = tables.has('session')
+      ? ((db.prepare('SELECT MAX(time_updated) AS ts FROM session').get() as { ts?: number | null })?.ts ?? 0)
+      : 0;
+    const latestV2 = hasV2
+      ? ((db.prepare('SELECT MAX(time_updated) AS ts FROM session_v2').get() as { ts?: number | null })?.ts ?? 0)
+      : 0;
+
+    this.useV2 = hasV2 && latestV2 >= latestV1 && latestV2 > 0;
+    const sessionTable = this.useV2 ? 'session_v2' : 'session';
+
+    console.log(
+      `${this.logPrefix()} Using OpenCode ${this.useV2 ? 'V2' : 'V1'} schema ` +
+      `(latest v1=${latestV1 || '-'}, v2=${latestV2 || '-'})`,
+    );
+
     this.stmtAllSessions = db.prepare(
-      'SELECT id, directory, parent_id, title, project_id FROM session',
+      `SELECT id, directory, parent_id, title, project_id FROM ${sessionTable}`,
     );
     this.stmtRecentSessions = db.prepare(
-      'SELECT id, directory, parent_id, title, project_id FROM session WHERE time_updated > ?',
+      `SELECT id, directory, parent_id, title, project_id FROM ${sessionTable} WHERE time_updated > ?`,
     );
-    this.stmtMessagesBySession = db.prepare(
-      'SELECT id, session_id, time_updated, data FROM message WHERE session_id = ? ORDER BY time_created',
-    );
-    this.stmtPartsBySession = db.prepare(
-      'SELECT id, message_id, session_id, time_created, time_updated, data FROM part WHERE session_id = ? ORDER BY time_created',
-    );
-    this.stmtNewMessages = db.prepare(
-      'SELECT id, session_id, time_updated, data FROM message WHERE time_updated > ? ORDER BY time_updated',
-    );
-    this.stmtNewParts = db.prepare(
-      'SELECT id, message_id, session_id, time_created, time_updated, data FROM part WHERE time_created > ? ORDER BY time_created',
-    );
+
+    if (this.useV2) {
+      this.stmtMessagesBySession = db.prepare(
+        'SELECT id, session_id, type, seq, time_updated, data FROM session_message WHERE session_id = ? ORDER BY seq',
+      );
+      this.stmtNewMessages = db.prepare(
+        'SELECT id, session_id, type, seq, time_updated, data FROM session_message WHERE time_updated > ? ORDER BY time_updated, seq',
+      );
+
+      // V2 stores assistant text/reasoning/tools inline in session_message.data.
+      // Keep no-op statements so the legacy replay/poll flow remains simple.
+      this.stmtPartsBySession = db.prepare(
+        "SELECT '' AS id, '' AS message_id, '' AS session_id, 0 AS time_created, 0 AS time_updated, '' AS data WHERE 0",
+      );
+      this.stmtNewParts = this.stmtPartsBySession;
+    } else {
+      this.stmtMessagesBySession = db.prepare(
+        'SELECT id, session_id, time_updated, data FROM message WHERE session_id = ? ORDER BY time_created',
+      );
+      this.stmtPartsBySession = db.prepare(
+        'SELECT id, message_id, session_id, time_created, time_updated, data FROM part WHERE session_id = ? ORDER BY time_created',
+      );
+      this.stmtNewMessages = db.prepare(
+        'SELECT id, session_id, time_updated, data FROM message WHERE time_updated > ? ORDER BY time_updated',
+      );
+      this.stmtNewParts = db.prepare(
+        'SELECT id, message_id, session_id, time_created, time_updated, data FROM part WHERE time_created > ? ORDER BY time_created',
+      );
+    }
   }
 
   // ── Session cache ──────────────────────────────────────────────────────────
@@ -272,6 +317,11 @@ export class OpenCodeWatcher implements AgentWatcher {
   // ── Row processors ─────────────────────────────────────────────────────────
 
   private processMessageRow(row: MessageRow) {
+    if (this.useV2) {
+      this.processV2MessageRow(row);
+      return;
+    }
+
     let data: OpenCodeMessageData;
     try {
       data = JSON.parse(row.data);
@@ -299,6 +349,121 @@ export class OpenCodeWatcher implements AgentWatcher {
 
     const sessionInfo = this.getSessionInfo(row.session_id);
     this.stateManager.processMessage(prefixedId, activity, sessionInfo);
+  }
+
+  private processV2MessageRow(row: MessageRow) {
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(row.data) as Record<string, unknown>;
+    } catch {
+      return;
+    }
+
+    const prefixedId = this.prefixed(row.session_id);
+    const sessionInfo = this.getSessionInfo(row.session_id);
+
+    if (row.type === 'idle') {
+      this.stateManager.hookStop(prefixedId);
+      return;
+    }
+
+    if (row.type === 'shell') {
+      const command = typeof data.command === 'string' ? data.command : '';
+      const seenKey = `v2:shell:${row.id}:${command}`;
+      if (this.seenIds.has(seenKey)) return;
+      this.seenIds.add(seenKey);
+
+      this.stateManager.processMessage(prefixedId, {
+        type: 'tool_use',
+        toolName: 'Bash',
+        toolInput: command ? { command } : {},
+      }, sessionInfo);
+      return;
+    }
+
+    if (row.type !== 'assistant') return;
+
+    const model = data.model as Record<string, unknown> | undefined;
+    const messageData: OpenCodeMessageData = {
+      id: row.id,
+      sessionID: row.session_id,
+      role: 'assistant',
+      finish: typeof data.finish === 'string' ? data.finish : undefined,
+      cost: typeof data.cost === 'number' ? data.cost : undefined,
+      time: data.time as OpenCodeMessageData['time'],
+      tokens: data.tokens as OpenCodeMessageData['tokens'],
+      modelID: typeof model?.id === 'string' ? model.id : undefined,
+      agent: typeof data.agent === 'string' ? data.agent : undefined,
+    };
+    this.messages.set(row.id, messageData);
+
+    // Usage becomes authoritative once the assistant message is completed.
+    const tokenKey = `v2:tokens:${row.id}`;
+    if (!this.seenIds.has(tokenKey)) {
+      const usage = this.parser.parseTokenUsage(messageData);
+      if (usage) {
+        this.seenIds.add(tokenKey);
+        this.stateManager.processMessage(prefixedId, usage, sessionInfo);
+      }
+    }
+
+    const content = Array.isArray(data.content) ? data.content : [];
+    for (const rawPart of content) {
+      if (!rawPart || typeof rawPart !== 'object') continue;
+      const part = rawPart as Record<string, unknown>;
+      const partType = part.type;
+      const partId = typeof part.id === 'string' ? part.id : 'part';
+
+      let seenKey: string | null = null;
+      let activity: ParsedActivity | null = null;
+
+      if (partType === 'tool') {
+        const state = part.state as Record<string, unknown> | undefined;
+        const status = typeof state?.status === 'string' ? state.status : 'unknown';
+        seenKey = `v2:tool:${row.id}:${partId}:${status}`;
+        if (this.seenIds.has(seenKey)) continue;
+
+        activity = this.parser.parsePart({
+          type: 'tool',
+          callID: partId,
+          tool: typeof part.name === 'string' ? part.name : 'tool',
+          state: (state ?? { status: 'pending' }) as any,
+        } as any, messageData);
+      } else if (partType === 'reasoning') {
+        const text = typeof part.text === 'string' ? part.text : '';
+        seenKey = `v2:reasoning:${row.id}:${partId}:${text}`;
+        if (this.seenIds.has(seenKey)) continue;
+
+        activity = this.parser.parsePart({
+          type: 'reasoning',
+          text,
+        } as any, messageData);
+      } else if (partType === 'text') {
+        const text = typeof part.text === 'string' ? part.text.trim() : '';
+        if (!text) continue;
+
+        // Streaming V2 rows update the same text item repeatedly. Only expose
+        // assistant text once the message has completed, while tool/reasoning
+        // activity stays live.
+        const completed = Boolean((data.time as Record<string, unknown> | undefined)?.completed);
+        if (!completed) continue;
+
+        const visibleText = text.length < 200 ? text : text.slice(0, 197) + '...';
+        seenKey = `v2:text:${row.id}:${partId}:${visibleText}`;
+        if (this.seenIds.has(seenKey)) continue;
+
+        activity = this.parser.parsePart({
+          type: 'text',
+          text: visibleText,
+        } as any, messageData);
+      }
+
+      if (!activity || !seenKey) continue;
+      this.seenIds.add(seenKey);
+      this.cancelStepFinishTimer(prefixedId);
+      this.cancelSessionEndTimer(prefixedId);
+      this.stateManager.processMessage(prefixedId, activity, sessionInfo);
+    }
   }
 
   private processPartRow(row: PartRow) {
