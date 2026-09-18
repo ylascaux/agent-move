@@ -191,7 +191,8 @@ const TOOL_NAME_MAP: Record<string, string> = {
   find: 'Glob',
   ls: 'Bash',
   truncate: 'Write',
-  // Codex CLI tool names
+  // Codex CLI / Desktop tool names
+  exec: 'Bash',
   shell_command: 'Bash',
   exec_command: 'Bash',
   read_file: 'Read',
