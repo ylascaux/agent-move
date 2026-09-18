@@ -55,14 +55,16 @@ export class CodexWatcher implements AgentWatcher {
     }
 
     const pattern = join(sessionsDir, '**', '*.jsonl');
-    // Use polling on Windows — fs.watch doesn't reliably detect changes
-    // in deeply nested directories (YYYY/MM/DD/) on Windows
-    const usePolling = process.platform === 'win32';
+    // Native fs events are unreliable both on Windows and for host directories
+    // bind-mounted into Docker Desktop. Collectors use AGENT_MOVE_CODEX_SESSIONS
+    // to point at those mounts, so automatically poll explicit session paths.
+    const usePolling = process.platform === 'win32' || Boolean(config.codexSessionsDir);
+    const pollInterval = usePolling ? 500 : undefined;
     this.watcher = chokidar.watch(pattern, {
       persistent: true,
       ignoreInitial: true,
       usePolling,
-      interval: usePolling ? 500 : undefined,
+      interval: pollInterval,
       awaitWriteFinish: usePolling ? false : { stabilityThreshold: 200, pollInterval: 50 },
     });
 
@@ -75,7 +77,7 @@ export class CodexWatcher implements AgentWatcher {
       this.processFile(filePath);
     });
 
-    console.log(`[codex] Watching for JSONL files in ${sessionsDir} (polling: ${usePolling})`);
+    console.log(`[codex] Watching for JSONL files in ${sessionsDir} (${usePolling ? `polling every ${pollInterval}ms` : 'native fs events'})`);
   }
 
   stop(): void {
