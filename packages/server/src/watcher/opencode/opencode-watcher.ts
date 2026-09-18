@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import type { AgentSource } from '@agent-move/shared';
 import type { AgentStateManager } from '../../state/agent-state-manager.js';
 import { createFallbackSession } from '../types.js';
-import type { SessionInfo } from '../types.js';
+import type { SessionInfo, ParsedActivity } from '../types.js';
 import { config } from '../../config.js';
 import {
   getOpenCodeDbPath,
@@ -415,7 +415,7 @@ export class OpenCodeWatcher implements AgentWatcher {
       const partId = typeof part.id === 'string' ? part.id : 'part';
 
       let seenKey: string | null = null;
-      let activity = null;
+      let activity: ParsedActivity | null = null;
 
       if (partType === 'tool') {
         const state = part.state as Record<string, unknown> | undefined;
